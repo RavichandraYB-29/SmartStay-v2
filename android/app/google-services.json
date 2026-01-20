@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "335173652406",
+    "project_id": "smartstay-beb80",
+    "storage_bucket": "smartstay-beb80.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:335173652406:android:b884118ee5fb25f944bb17",
+        "android_client_info": {
+          "package_name": "com.example.flutter_application_1"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCKPLvr2jNHI-l3o-lj-6DmqPeWV3GmO5w"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

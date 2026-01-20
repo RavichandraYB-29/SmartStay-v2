@@ -1,0 +1,128 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function userDoc() {
+      return get(userPath());
+    }
+
+    function userExists() {
+      return exists(userPath());
+    }
+
+    function isAdmin() {
+      return isSignedIn() && userExists() && userDoc().data.role == 'admin';
+    }
+
+    function isResident() {
+      return isSignedIn() && userExists() && userDoc().data.role == 'resident';
+    }
+
+    function hostelPath(hostelId) {
+      return /databases/$(database)/documents/hostels/$(hostelId);
+    }
+
+    function isHostelAdmin(hostelId) {
+      let hostel = get(hostelPath(hostelId));
+      return isAdmin() && exists(hostelPath(hostelId)) && (
+        hostel.data.adminId == request.auth.uid ||
+        hostel.data.ownerId == request.auth.uid
+      );
+    }
+
+    function isHostelOwner(hostelId) {
+      let hostel = get(hostelPath(hostelId));
+      return isSignedIn() && exists(hostelPath(hostelId)) && (
+        hostel.data.adminId == request.auth.uid ||
+        hostel.data.ownerId == request.auth.uid
+      );
+    }
+
+    function isAssignedToHostel(hostelId) {
+      return isResident() &&
+          userDoc().data.stayStatus == 'active' &&
+          userDoc().data.assignedHostelId == hostelId;
+    }
+
+    function isAssignedToRoom(hostelId, floorId, roomId) {
+      return isAssignedToHostel(hostelId) &&
+          userDoc().data.assignedFloorId == floorId &&
+          userDoc().data.assignedRoomId == roomId;
+    }
+
+    function isAdminOwner(data) {
+      return isAdmin() && (
+        data.adminId == request.auth.uid ||
+        data.ownerId == request.auth.uid
+      );
+    }
+
+    function isOwner(data) {
+      return isSignedIn() && (
+        data.adminId == request.auth.uid ||
+        data.ownerId == request.auth.uid
+      );
+    }
+
+    function isSelf(data) {
+      return isSignedIn() && data.userId == request.auth.uid;
+    }
+
+    match /users/{userId} {
+      allow create: if isSignedIn() && userId == request.auth.uid;
+      allow read, update: if isSignedIn() && userId == request.auth.uid;
+    }
+
+    match /hostels/{hostelId} {
+      allow create: if isAdmin() &&
+          request.resource.data.adminId == request.auth.uid &&
+          request.resource.data.ownerId == request.auth.uid;
+      allow read: if isOwner(resource.data) || isAssignedToHostel(hostelId);
+      allow update, delete: if isAdmin() && isOwner(resource.data);
+
+      match /floors/{floorId} {
+        allow create, update, delete: if isHostelAdmin(hostelId);
+        allow read: if isHostelOwner(hostelId) || isAssignedToHostel(hostelId);
+
+        match /rooms/{roomId} {
+          allow create, update, delete: if isHostelAdmin(hostelId);
+          allow read: if isHostelOwner(hostelId) ||
+              isAssignedToRoom(hostelId, floorId, roomId);
+
+          match /beds/{bedId} {
+            allow create, update, delete: if isHostelAdmin(hostelId);
+            allow read: if isHostelOwner(hostelId) ||
+                isAssignedToRoom(hostelId, floorId, roomId);
+          }
+        }
+      }
+    }
+
+    match /residents/{residentId} {
+      allow create: if isAdmin() &&
+          request.resource.data.adminId == request.auth.uid;
+      allow read, update, delete: if isAdminOwner(resource.data) ||
+          isOwner(resource.data) ||
+          (resource.data.hostelId != null && isHostelAdmin(resource.data.hostelId));
+    }
+
+    match /complaints/{complaintId} {
+      allow create: if isSignedIn() && isSelf(request.resource.data);
+      allow read, update, delete: if isAdminOwner(resource.data) ||
+          isOwner(resource.data) || isSelf(resource.data);
+    }
+
+    match /payments/{paymentId} {
+      allow create, update, delete: if isAdminOwner(request.resource.data);
+      allow read: if isAdminOwner(resource.data) ||
+          isOwner(resource.data) || isSelf(resource.data);
+    }
+  }
+}
