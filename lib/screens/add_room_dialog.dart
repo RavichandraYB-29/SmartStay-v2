@@ -26,6 +26,50 @@ class _AddRoomDialogState extends State<AddRoomDialog> {
   String _sharingType = 'Single';
   bool _isLoading = false;
 
+  void _showDialog(String title, String message) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _bedsController.text = _getBedsFromSharing().toString(); // ✅ correct place
+    _roomNoController.addListener(_refreshFormState);
+    _rentController.addListener(_refreshFormState);
+  }
+
+  @override
+  void dispose() {
+    _roomNoController.dispose();
+    _bedsController.dispose();
+    _rentController.dispose();
+    super.dispose();
+  }
+
+  void _refreshFormState() {
+    if (mounted) setState(() {});
+  }
+
+  bool get _canSubmit {
+    final rent = int.tryParse(_rentController.text.trim());
+    return !_isLoading &&
+        _roomNoController.text.trim().isNotEmpty &&
+        rent != null &&
+        rent > 0;
+  }
+
   int _getBedsFromSharing() {
     switch (_sharingType) {
       case 'Single':
@@ -44,7 +88,6 @@ class _AddRoomDialogState extends State<AddRoomDialog> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    _bedsController.text = _getBedsFromSharing().toString();
 
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -168,7 +211,7 @@ class _AddRoomDialogState extends State<AddRoomDialog> {
             const SizedBox(width: 14),
             Expanded(
               child: ElevatedButton.icon(
-                onPressed: _isLoading ? null : _addRoom,
+                onPressed: _canSubmit ? _addRoom : null,
                 icon: const Icon(Icons.add),
                 label: const Text('Add Room'),
                 style: ElevatedButton.styleFrom(
@@ -200,7 +243,7 @@ class _AddRoomDialogState extends State<AddRoomDialog> {
           onTap: () {
             setState(() {
               _sharingType = e.key;
-              _bedsController.text = e.value.toString();
+              _bedsController.text = e.value.toString(); // ✅ correct here
             });
           },
           borderRadius: BorderRadius.circular(14),
@@ -244,66 +287,63 @@ class _AddRoomDialogState extends State<AddRoomDialog> {
     );
   }
 
-  // ───────────────── FIRESTORE LOGIC (UPDATED) ─────────────────
+  // ───────────────── FIRESTORE LOGIC ─────────────────
   Future<void> _addRoom() async {
     if (_roomNoController.text.trim().isEmpty ||
-        _rentController.text.trim().isEmpty)
+        _rentController.text.trim().isEmpty) {
+      _showDialog('Missing Details', 'Please fill all required fields.');
       return;
+    }
+
+    final rent = int.tryParse(_rentController.text.trim());
+    if (rent == null || rent <= 0) {
+      _showDialog('Invalid Rent', 'Please enter a valid rent amount.');
+      return;
+    }
 
     final totalBeds = _getBedsFromSharing();
     setState(() => _isLoading = true);
 
-    final firestore = FirebaseFirestore.instance;
-    final batch = firestore.batch();
+    try {
+      final firestore = FirebaseFirestore.instance;
+      final batch = firestore.batch();
 
-    final roomRef = firestore
-        .collection('hostels')
-        .doc(widget.hostelId)
-        .collection('floors')
-        .doc(widget.floorId)
-        .collection('rooms')
-        .doc();
-
-    batch.set(roomRef, {
-      'adminId': widget.adminId,
-      'hostelId': widget.hostelId,
-      'floorId': widget.floorId,
-      'roomNumber': _roomNoController.text.trim(),
-      'name': 'Room ${_roomNoController.text.trim()}',
-      'sharingType': _sharingType,
-      'totalBeds': totalBeds,
-      'occupiedBeds': 0,
-      'rentPerBed': int.parse(_rentController.text.trim()),
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-
-    for (int i = 1; i <= totalBeds; i++) {
-      batch.set(roomRef.collection('beds').doc('B$i'), {
-        'bedNumber': 'B$i',
-        'isOccupied': false,
-        'residentId': null,
-      });
-    }
-
-    batch.update(
-      firestore
+      final roomRef = firestore
           .collection('hostels')
           .doc(widget.hostelId)
           .collection('floors')
-          .doc(widget.floorId),
-      {
-        'totalRooms': FieldValue.increment(1),
-        'totalBeds': FieldValue.increment(totalBeds),
-      },
-    );
+          .doc(widget.floorId)
+          .collection('rooms')
+          .doc();
 
-    batch.update(firestore.collection('hostels').doc(widget.hostelId), {
-      'totalRooms': FieldValue.increment(1),
-      'totalBeds': FieldValue.increment(totalBeds),
-    });
+      batch.set(roomRef, {
+        'adminId': widget.adminId,
+        'hostelId': widget.hostelId,
+        'floorId': widget.floorId,
+        'roomNumber': _roomNoController.text.trim(),
+        'name': 'Room ${_roomNoController.text.trim()}',
+        'sharingType': _sharingType,
+        'totalBeds': totalBeds,
+        'occupiedBeds': 0,
+        'rentPerBed': rent,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
 
-    await batch.commit();
-    if (mounted) Navigator.pop(context);
+      for (int i = 1; i <= totalBeds; i++) {
+        batch.set(roomRef.collection('beds').doc('B$i'), {
+          'bedNumber': 'B$i',
+          'isOccupied': false,
+          'residentId': null,
+        });
+      }
+
+      await batch.commit();
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      _showDialog('Add Room Failed', 'Unable to add room. Please try again.');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   // ───────────────── HELPERS ─────────────────

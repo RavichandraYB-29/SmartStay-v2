@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 
 import '../widgets/custom_textfield.dart';
 import '../widgets/forgot_password_dialog.dart';
@@ -22,7 +21,9 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   bool isLoginTab = true;
   bool isLoading = false;
+  bool rememberMe = true;
 
+  /// UI role selector (UI ONLY, not security)
   String selectedRole = 'resident';
 
   final loginEmailController = TextEditingController();
@@ -33,17 +34,178 @@ class _LoginScreenState extends State<LoginScreen> {
   final phoneController = TextEditingController();
   final passwordController = TextEditingController();
 
-  void _clearLoginFields() {
-    loginEmailController.clear();
-    loginPasswordController.clear();
+  @override
+  void initState() {
+    super.initState();
+    loginEmailController.addListener(_refreshFormState);
+    loginPasswordController.addListener(_refreshFormState);
+    nameController.addListener(_refreshFormState);
+    emailController.addListener(_refreshFormState);
+    phoneController.addListener(_refreshFormState);
+    passwordController.addListener(_refreshFormState);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _attemptAutoLogin());
   }
 
-  void _clearRegisterFields() {
-    nameController.clear();
-    emailController.clear();
-    phoneController.clear();
-    passwordController.clear();
+  @override
+  void dispose() {
+    loginEmailController.dispose();
+    loginPasswordController.dispose();
+    nameController.dispose();
+    emailController.dispose();
+    phoneController.dispose();
+    passwordController.dispose();
+    super.dispose();
   }
+
+  bool _isValidEmail(String email) {
+    return RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email);
+  }
+
+  bool _isValidPhone(String phone) {
+    final digits = phone.replaceAll(RegExp(r'\D'), '');
+    return digits.length == 10;
+  }
+
+  bool _isStrongPassword(String password) {
+    final hasUpper = RegExp(r'[A-Z]').hasMatch(password);
+    final hasLower = RegExp(r'[a-z]').hasMatch(password);
+    final hasDigit = RegExp(r'\d').hasMatch(password);
+    return password.length >= 8 && hasUpper && hasLower && hasDigit;
+  }
+
+  Future<bool> _sendVerificationEmail(User user) async {
+    try {
+      debugPrint('VERIFY_EMAIL: start uid=${user.uid}');
+      await user.sendEmailVerification();
+      debugPrint('VERIFY_EMAIL: success uid=${user.uid}');
+      if (mounted) {
+        _showAuthDialog(
+          title: 'Verification Email Sent',
+          message: 'Please check your inbox and spam folder.',
+        );
+      }
+      return true;
+    } on FirebaseAuthException catch (e) {
+      debugPrint(
+        'VERIFY_EMAIL: failed uid=${user.uid} code=${e.code} message=${e.message}',
+      );
+      _showAuthDialog(
+        title: 'Verification Failed',
+        message: e.message ?? 'Unable to send verification email.',
+        isError: true,
+      );
+      return false;
+    } catch (e) {
+      debugPrint('VERIFY_EMAIL: failed uid=${user.uid} error=$e');
+      _showAuthDialog(
+        title: 'Verification Failed',
+        message: 'Unable to send verification email. Please try again.',
+        isError: true,
+      );
+      return false;
+    }
+  }
+
+  bool get _canLogin {
+    return _isValidEmail(loginEmailController.text.trim()) &&
+        loginPasswordController.text.trim().isNotEmpty;
+  }
+
+  bool get _canRegister {
+    return nameController.text.trim().isNotEmpty &&
+        _isValidEmail(emailController.text.trim()) &&
+        _isValidPhone(phoneController.text.trim()) &&
+        _isStrongPassword(passwordController.text.trim());
+  }
+
+  void _refreshFormState() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _attemptAutoLogin() async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    setState(() => isLoading = true);
+
+    try {
+      if (!currentUser.emailVerified) {
+        final sent = await _sendVerificationEmail(currentUser);
+        if (!sent) return;
+        // Do not sign out before verification request completes.
+        await Future.delayed(const Duration(milliseconds: 800));
+        await FirebaseAuth.instance.signOut();
+        if (!mounted) return;
+        _showAuthDialog(
+          title: 'Email Verification Required',
+          message:
+              'Please verify your email before logging in. A link was sent.',
+          isError: true,
+        );
+        return;
+      }
+
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
+          .get();
+
+      if (!userDoc.exists) {
+        await FirebaseAuth.instance.signOut();
+        return;
+      }
+
+      final role = userDoc['role'];
+      if (!mounted) return;
+
+      if (role == 'admin') {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const AdminDashboard()),
+        );
+      } else {
+        final residentSnap = await FirebaseFirestore.instance
+            .collection('residents')
+            .where('uid', isEqualTo: currentUser.uid)
+            .limit(1)
+            .get();
+        final residentDoc = residentSnap.docs.isNotEmpty
+            ? residentSnap.docs.first
+            : await FirebaseFirestore.instance
+                .collection('residents')
+                .doc('_missing')
+                .get();
+
+        if (!residentDoc.exists) {
+          await FirebaseAuth.instance.signOut();
+          _showAuthDialog(
+            title: 'Resident Not Found',
+            message: 'Your resident profile is missing. Contact admin.',
+            isError: true,
+          );
+          return;
+        }
+
+        if (!mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const ResidentDashboard()),
+        );
+      }
+    } catch (e) {
+      await FirebaseAuth.instance.signOut();
+      if (!mounted) return;
+      _showAuthDialog(
+        title: 'Login Failed',
+        message: 'Unable to restore session. Please login again.',
+        isError: true,
+      );
+    } finally {
+      if (mounted) setState(() => isLoading = false);
+    }
+  }
+
+  /* ====================== DIALOG ====================== */
 
   void _showAuthDialog({
     required String title,
@@ -59,20 +221,10 @@ class _LoginScreenState extends State<LoginScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: 56,
-                height: 56,
-                decoration: BoxDecoration(
-                  color: isError
-                      ? Colors.red.withOpacity(0.1)
-                      : const Color(0xFF6C3BFF).withOpacity(0.1),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  isError ? Icons.error_outline : Icons.check_circle_outline,
-                  color: isError ? Colors.red : const Color(0xFF6C3BFF),
-                  size: 32,
-                ),
+              Icon(
+                isError ? Icons.error_outline : Icons.check_circle_outline,
+                color: isError ? Colors.red : const Color(0xFF6C3BFF),
+                size: 48,
               ),
               const SizedBox(height: 16),
               Text(title, style: AppTextStyles.h3),
@@ -80,24 +232,12 @@ class _LoginScreenState extends State<LoginScreen> {
               Text(
                 message,
                 textAlign: TextAlign.center,
-                style: AppTextStyles.bodyMedium.copyWith(
-                  color: Colors.grey.shade700,
-                ),
+                style: AppTextStyles.bodyMedium,
               ),
               const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF6C3BFF),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(30),
-                    ),
-                  ),
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('OK'),
-                ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK'),
               ),
             ],
           ),
@@ -106,84 +246,8 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Future<String> _ensureUserProfile(User user) async {
-    final ref = FirebaseFirestore.instance.collection('users').doc(user.uid);
-    final snap = await ref.get();
+  /* ====================== REGISTER ====================== */
 
-    if (!snap.exists) {
-      await ref.set({
-        'name': user.displayName ?? nameController.text.trim(),
-        'email': user.email ?? loginEmailController.text.trim(),
-        'phone': user.phoneNumber ?? phoneController.text.trim(),
-        'role': selectedRole,
-        'authProvider': user.providerData.isNotEmpty
-            ? user.providerData.first.providerId
-            : 'email',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-      return selectedRole;
-    }
-
-    final data = snap.data() ?? {};
-    final role = data['role'];
-    if (role is String && role.isNotEmpty) {
-      return role;
-    }
-
-    await ref.update({'role': selectedRole});
-    return selectedRole;
-  }
-
-  // ---------------- LOGIN ----------------
-  Future<void> loginUser() async {
-    if (loginEmailController.text.isEmpty ||
-        loginPasswordController.text.isEmpty) {
-      _showAuthDialog(
-        title: 'Missing Details',
-        message: 'Please enter email and password.',
-        isError: true,
-      );
-      return;
-    }
-
-    setState(() => isLoading = true);
-
-    try {
-      final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: loginEmailController.text.trim(),
-        password: loginPasswordController.text.trim(),
-      );
-
-      final role = await _ensureUserProfile(cred.user!);
-
-      _clearLoginFields();
-
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (_) => role == 'admin'
-              ? const AdminDashboard()
-              : const ResidentDashboard(),
-        ),
-      );
-    } on FirebaseAuthException catch (e) {
-      _showAuthDialog(
-        title: 'Login Failed',
-        message: e.message ?? 'Authentication error',
-        isError: true,
-      );
-    } catch (e) {
-      _showAuthDialog(
-        title: 'Login Failed',
-        message: e.toString(),
-        isError: true,
-      );
-    }
-
-    setState(() => isLoading = false);
-  }
-
-  // ---------------- REGISTER ----------------
   Future<void> registerUser() async {
     if (nameController.text.isEmpty ||
         emailController.text.isEmpty ||
@@ -197,33 +261,192 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
+    if (!_isValidEmail(emailController.text.trim())) {
+      _showAuthDialog(
+        title: 'Invalid Email',
+        message: 'Please enter a valid email address.',
+        isError: true,
+      );
+      return;
+    }
+
+    if (!_isValidPhone(phoneController.text.trim())) {
+      _showAuthDialog(
+        title: 'Invalid Phone',
+        message: 'Please enter a valid 10-digit phone number.',
+        isError: true,
+      );
+      return;
+    }
+
+    if (!_isStrongPassword(passwordController.text.trim())) {
+      _showAuthDialog(
+        title: 'Weak Password',
+        message:
+            'Password must be at least 8 characters with upper, lower, and a number.',
+        isError: true,
+      );
+      return;
+    }
+
     setState(() => isLoading = true);
 
+    User? createdUser;
+
     try {
-      final cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(
-        email: emailController.text.trim(),
-        password: passwordController.text.trim(),
-      );
-
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(cred.user!.uid)
-          .set({
+      /// 🔐 RESIDENT REGISTRATION (INVITE ONLY)
+      if (selectedRole == 'resident') {
+        final inputEmail = emailController.text.trim().toLowerCase();
+        
+        // STEP 1: Create Firebase Auth user first (required to query Firestore)
+        debugPrint('RESIDENT_SIGNUP: Creating auth user for $inputEmail');
+        final cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(
+          email: inputEmail,
+          password: passwordController.text.trim(),
+        );
+        createdUser = cred.user;
+        final currentUser = cred.user!;
+        
+        // STEP 2: Send verification email immediately
+        if (!currentUser.emailVerified) {
+          final sent = await _sendVerificationEmail(currentUser);
+          if (!sent) {
+            await currentUser.delete();
+            createdUser = null;
+            return;
+          }
+        }
+        
+        // STEP 3: Query for matching invite (user is now signed in)
+        // Use currentUser.email to ensure it matches request.auth.token.email
+        debugPrint('RESIDENT_SIGNUP: Querying invite for email=${currentUser.email}');
+        
+        QuerySnapshot<Map<String, dynamic>> inviteSnap;
+        try {
+          inviteSnap = await FirebaseFirestore.instance
+              .collection('residents')
+              .where('email', isEqualTo: currentUser.email)
+              .where('status', isEqualTo: 'invited')
+              .limit(1)
+              .get();
+        } catch (e) {
+          debugPrint('RESIDENT_SIGNUP: Query failed: $e');
+          await currentUser.delete();
+          createdUser = null;
+          _showAuthDialog(
+            title: 'Registration Failed',
+            message: 'Unable to verify invite. Please try again.',
+            isError: true,
+          );
+          return;
+        }
+        
+        if (inviteSnap.docs.isEmpty) {
+          debugPrint('RESIDENT_SIGNUP: No invite found, deleting auth user');
+          await currentUser.delete();
+          createdUser = null;
+          _showAuthDialog(
+            title: 'Not Invited',
+            message: 'You are not invited. Please contact the admin.',
+            isError: true,
+          );
+          return;
+        }
+        
+        final inviteDoc = inviteSnap.docs.first;
+        final inviteData = inviteDoc.data();
+        
+        // Verify invite is valid (double-check status and uid)
+        if (inviteData['uid'] != null) {
+          debugPrint('RESIDENT_SIGNUP: Invite already claimed');
+          await currentUser.delete();
+          createdUser = null;
+          _showAuthDialog(
+            title: 'Already Claimed',
+            message: 'This invite is already linked to another account.',
+            isError: true,
+          );
+          return;
+        }
+        
+        // STEP 4: Link the invite to this auth user
+        debugPrint('RESIDENT_SIGNUP: Linking invite ${inviteDoc.id} to uid=${currentUser.uid}');
+        try {
+          await inviteDoc.reference.update({
+            'uid': currentUser.uid,
+            'status': 'registered',
             'name': nameController.text.trim(),
-            'email': emailController.text.trim(),
+            'fullName': nameController.text.trim(),
             'phone': phoneController.text.trim(),
-            'role': selectedRole,
-            'authProvider': 'email',
-            'createdAt': FieldValue.serverTimestamp(),
           });
+        } catch (e) {
+          debugPrint('RESIDENT_SIGNUP: Failed to update invite: $e');
+          await currentUser.delete();
+          createdUser = null;
+          _showAuthDialog(
+            title: 'Registration Failed',
+            message: 'Unable to link your account. Please try again.',
+            isError: true,
+          );
+          return;
+        }
 
-      _clearRegisterFields();
+        final residentId = inviteDoc.id;
+
+        // STEP 5: Create user profile document
+        debugPrint('RESIDENT_SIGNUP: Creating user profile');
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(currentUser.uid)
+            .set({
+              'name': nameController.text.trim(),
+              'email': currentUser.email,
+              'phone': phoneController.text.trim(),
+              'role': 'resident',
+              'residentId': residentId,
+              'createdAt': FieldValue.serverTimestamp(),
+            });
+        
+        debugPrint('RESIDENT_SIGNUP: Success');
+      }
+      /// 🔐 ADMIN REGISTRATION
+      else {
+        final cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(
+          email: emailController.text.trim(),
+          password: passwordController.text.trim(),
+        );
+        createdUser = cred.user;
+
+        final currentUser = FirebaseAuth.instance.currentUser ?? cred.user;
+        if (currentUser != null && !currentUser.emailVerified) {
+          final sent = await _sendVerificationEmail(currentUser);
+          if (!sent) {
+            await currentUser.delete();
+            return;
+          }
+        }
+
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(cred.user!.uid)
+            .set({
+              'name': nameController.text.trim(),
+              'email': emailController.text.trim(),
+              'phone': phoneController.text.trim(),
+              'role': 'admin',
+              'createdAt': FieldValue.serverTimestamp(),
+            });
+      }
 
       _showAuthDialog(
         title: 'Success',
-        message: 'Account created successfully.',
+        message:
+            'Account created. Please verify your email before logging in.',
       );
 
+      // Do not sign out before verification request completes.
+      await Future.delayed(const Duration(milliseconds: 800));
+      await FirebaseAuth.instance.signOut();
       setState(() => isLoginTab = true);
     } on FirebaseAuthException catch (e) {
       _showAuthDialog(
@@ -231,65 +454,176 @@ class _LoginScreenState extends State<LoginScreen> {
         message: e.message ?? 'Registration error',
         isError: true,
       );
-    } catch (e) {
+    } on FirebaseException catch (e) {
+      if (createdUser != null) {
+        try {
+          await createdUser.delete();
+        } catch (_) {}
+      }
       _showAuthDialog(
         title: 'Registration Failed',
-        message: e.toString(),
+        message: e.message ?? 'Registration error',
         isError: true,
       );
+    } catch (e) {
+      if (createdUser != null) {
+        try {
+          await createdUser.delete();
+        } catch (_) {}
+      }
+      _showAuthDialog(
+        title: 'Registration Failed',
+        message: 'Unable to complete registration. Please try again.',
+        isError: true,
+      );
+    } finally {
+      setState(() => isLoading = false);
     }
-
-    setState(() => isLoading = false);
   }
 
-  // ---------------- GOOGLE SIGN-IN ----------------
-  Future<void> signInWithGoogle() async {
+  /* ====================== LOGIN ====================== */
+
+  Future<void> loginUser() async {
+    if (loginEmailController.text.isEmpty ||
+        loginPasswordController.text.isEmpty) {
+      _showAuthDialog(
+        title: 'Missing Details',
+        message: 'Please enter email and password.',
+        isError: true,
+      );
+      return;
+    }
+
+    if (!_isValidEmail(loginEmailController.text.trim())) {
+      _showAuthDialog(
+        title: 'Invalid Email',
+        message: 'Please enter a valid email address.',
+        isError: true,
+      );
+      return;
+    }
+
     setState(() => isLoading = true);
 
     try {
-      UserCredential userCred;
-
       if (kIsWeb) {
-        final provider = GoogleAuthProvider();
-        userCred = await FirebaseAuth.instance.signInWithPopup(provider);
+        await FirebaseAuth.instance.setPersistence(
+          rememberMe ? Persistence.LOCAL : Persistence.SESSION,
+        );
+      }
+
+      final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: loginEmailController.text.trim(),
+        password: loginPasswordController.text.trim(),
+      );
+
+      if (!cred.user!.emailVerified) {
+        final sent = await _sendVerificationEmail(cred.user!);
+        if (sent) {
+          // Do not sign out before verification request completes.
+          await Future.delayed(const Duration(milliseconds: 800));
+        }
+        await FirebaseAuth.instance.signOut();
+        _showAuthDialog(
+          title: 'Email Verification Required',
+          message:
+              'Please verify your email first. We just sent a verification link.',
+          isError: true,
+        );
+        return;
+      }
+
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(cred.user!.uid)
+          .get();
+
+      if (!userDoc.exists) {
+        await FirebaseAuth.instance.signOut();
+        _showAuthDialog(
+          title: 'Access Denied',
+          message: 'User profile not found. Contact admin.',
+          isError: true,
+        );
+        return;
+      }
+
+      final role = userDoc['role'];
+      if (role != 'admin' && role != 'resident') {
+        await FirebaseAuth.instance.signOut();
+        _showAuthDialog(
+          title: 'Access Denied',
+          message: 'This account is not authorized to access this portal.',
+          isError: true,
+        );
+        return;
+      }
+
+      if (selectedRole != role) {
+        await FirebaseAuth.instance.signOut();
+        _showAuthDialog(
+          title: 'Access Denied',
+          message: 'This account is not authorized to access this portal.',
+          isError: true,
+        );
+        return;
+      }
+
+      if (role == 'admin') {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const AdminDashboard()),
+        );
       } else {
-        final googleUser = await GoogleSignIn().signIn();
-        if (googleUser == null) {
-          setState(() => isLoading = false);
+        final residentSnap = await FirebaseFirestore.instance
+            .collection('residents')
+            .where('uid', isEqualTo: cred.user!.uid)
+            .limit(1)
+            .get();
+
+        if (residentSnap.docs.isEmpty) {
+          await FirebaseAuth.instance.signOut();
+          _showAuthDialog(
+            title: 'Resident Not Found',
+            message: 'Your resident profile is missing. Contact admin.',
+            isError: true,
+          );
           return;
         }
 
-        final googleAuth = await googleUser.authentication;
-        final credential = GoogleAuthProvider.credential(
-          accessToken: googleAuth.accessToken,
-          idToken: googleAuth.idToken,
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const ResidentDashboard()),
         );
-
-        userCred = await FirebaseAuth.instance.signInWithCredential(credential);
       }
-
-      final user = userCred.user!;
-
-      final role = await _ensureUserProfile(user);
-
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (_) => role == 'admin'
-              ? const AdminDashboard()
-              : const ResidentDashboard(),
-        ),
+    } on FirebaseAuthException catch (e) {
+      _showAuthDialog(
+        title: 'Login Failed',
+        message: e.message ?? 'Authentication error',
+        isError: true,
       );
     } catch (e) {
       _showAuthDialog(
-        title: 'Google Sign-In Failed',
-        message: e.toString(),
+        title: 'Login Failed',
+        message: 'Unable to login. Please try again.',
         isError: true,
       );
+    } finally {
+      setState(() => isLoading = false);
     }
-
-    setState(() => isLoading = false);
   }
+
+  /* ====================== GOOGLE SIGN-IN ====================== */
+
+  Future<void> signInWithGoogle() async {
+    _showAuthDialog(
+      title: 'Disabled',
+      message: 'Google Sign-In is currently disabled.',
+      isError: true,
+    );
+  }
+
+  /* ====================== UI ====================== */
 
   @override
   Widget build(BuildContext context) {
@@ -379,12 +713,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     return Expanded(
       child: GestureDetector(
-        onTap: () {
-          setState(() {
-            isLoginTab = loginTab;
-            loginTab ? _clearRegisterFields() : _clearLoginFields();
-          });
-        },
+        onTap: () => setState(() => isLoginTab = loginTab),
         child: Column(
           children: [
             Text(
@@ -422,8 +751,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Widget _roleButton(String role, String label, IconData icon) {
     final selected = selectedRole == role;
-
-    final activeColor = role == 'resident'
+    final color = role == 'resident'
         ? const Color(0xFF22B8A7)
         : const Color(0xFF6C3BFF);
 
@@ -433,23 +761,20 @@ class _LoginScreenState extends State<LoginScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 12),
           decoration: BoxDecoration(
-            color: selected ? activeColor.withOpacity(0.12) : Colors.white,
+            color: selected ? color.withOpacity(0.12) : Colors.white,
             borderRadius: BorderRadius.circular(30),
-            border: Border.all(
-              color: selected ? activeColor : Colors.grey.shade300,
-              width: selected ? 1.5 : 1,
-            ),
+            border: Border.all(color: selected ? color : Colors.grey.shade300),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 18, color: selected ? activeColor : Colors.grey),
+              Icon(icon, size: 18, color: selected ? color : Colors.grey),
               const SizedBox(width: 6),
               Text(
                 label,
                 style: AppTextStyles.bodyMedium.copyWith(
                   fontWeight: FontWeight.w600,
-                  color: selected ? activeColor : Colors.grey,
+                  color: selected ? color : Colors.grey,
                 ),
               ),
             ],
@@ -473,6 +798,17 @@ class _LoginScreenState extends State<LoginScreen> {
           label: 'Password',
           isPassword: true,
         ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Checkbox(
+              value: rememberMe,
+              onChanged: (value) =>
+                  setState(() => rememberMe = value ?? true),
+            ),
+            Text('Remember me', style: AppTextStyles.bodySmall),
+          ],
+        ),
         Align(
           alignment: Alignment.centerRight,
           child: TextButton(
@@ -486,29 +822,17 @@ class _LoginScreenState extends State<LoginScreen> {
         GradientButton(
           text: 'Sign In',
           isLoading: isLoading,
-          onPressed: loginUser,
+          onPressed: _canLogin ? loginUser : null,
         ),
         const SizedBox(height: 16),
         OutlinedButton(
           onPressed: signInWithGoogle,
-          style: OutlinedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(30),
-            ),
-            side: BorderSide(color: Colors.grey.shade300),
-          ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Image.asset('assets/images/google.png', height: 20),
-              const SizedBox(width: 12),
-              Text(
-                'Continue with Google',
-                style: AppTextStyles.bodyMedium.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
+              _googleLogoIcon(),
+              const SizedBox(width: 8),
+              const Text('Continue with Google'),
             ],
           ),
         ),
@@ -534,9 +858,37 @@ class _LoginScreenState extends State<LoginScreen> {
         GradientButton(
           text: 'Create Account',
           isLoading: isLoading,
-          onPressed: registerUser,
+          onPressed: _canRegister ? registerUser : null,
         ),
       ],
+    );
+  }
+
+  Widget _googleLogoIcon() {
+    const colors = [
+      Color(0xFF4285F4),
+      Color(0xFFDB4437),
+      Color(0xFFF4B400),
+      Color(0xFF0F9D58),
+      Color(0xFF4285F4),
+    ];
+
+    return SizedBox(
+      width: 18,
+      height: 18,
+      child: ShaderMask(
+        shaderCallback: (rect) => const SweepGradient(colors: colors)
+            .createShader(rect),
+        child: const Text(
+          'G',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+      ),
     );
   }
 }

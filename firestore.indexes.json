@@ -15,6 +15,15 @@
         { "fieldPath": "ownerId", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "residents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "adminId", "order": "ASCENDING" },
+        { "fieldPath": "isAllocated", "order": "ASCENDING" },
+        { "fieldPath": "allocatedAt", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

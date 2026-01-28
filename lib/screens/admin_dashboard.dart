@@ -4,23 +4,95 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../main.dart';
+import 'login_screen.dart';
 import 'hostel_management_screen.dart';
 import 'add_resident_screen.dart';
 import '../theme/app_text_styles.dart';
 
-class AdminDashboard extends StatelessWidget {
+class AdminDashboard extends StatefulWidget {
   const AdminDashboard({super.key});
+
+  @override
+  State<AdminDashboard> createState() => _AdminDashboardState();
+}
+
+class _AdminDashboardState extends State<AdminDashboard> {
+  bool _checkedRole = false;
+  String? _adminId;
+
+  @override
+  void initState() {
+    super.initState();
+    _ensureAdminRole();
+  }
+
+  Future<void> _ensureAdminRole() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      _signOutToLogin();
+      return;
+    }
+
+    try {
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+      final role = userDoc.data()?['role'];
+
+      if (role != 'admin') {
+        _showRoleBlocked();
+        return;
+      }
+
+      setState(() {
+        _adminId = user.uid;
+        _checkedRole = true;
+      });
+    } catch (_) {
+      _signOutToLogin();
+    }
+  }
+
+  void _showRoleBlocked() {
+    FirebaseAuth.instance.signOut();
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Access Denied'),
+        content: const Text(
+          'This account is not authorized to access the admin dashboard.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    ).then((_) => _signOutToLogin());
+  }
+
+  void _signOutToLogin() {
+    if (!mounted) return;
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (_) => false,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final date = DateFormat('MMM dd, yyyy').format(DateTime.now());
-    final user = FirebaseAuth.instance.currentUser;
 
-    if (user == null) {
-      return const Scaffold(body: Center(child: Text('User not logged in')));
+    if (!_checkedRole || _adminId == null) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
     }
 
-    final adminId = user.uid;
+    final adminId = _adminId!;
 
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -33,7 +105,7 @@ class AdminDashboard extends StatelessWidget {
             const SizedBox(height: 22),
             const _SearchBar(),
             const SizedBox(height: 28),
-            const _StatsRow(),
+            _StatsRow(adminId: adminId),
             const SizedBox(height: 32),
             _QuickActions(context, adminId),
             const SizedBox(height: 32),
@@ -99,6 +171,20 @@ class _Header extends StatelessWidget {
           onPressed: () => app!.themeController.toggleTheme(),
         ),
         const SizedBox(width: 8),
+        IconButton(
+          tooltip: 'Logout',
+          icon: const Icon(Icons.logout),
+          onPressed: () async {
+            await FirebaseAuth.instance.signOut();
+            if (!context.mounted) return;
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(builder: (_) => const LoginScreen()),
+              (_) => false,
+            );
+          },
+        ),
+        const SizedBox(width: 4),
         CircleAvatar(
           backgroundColor: cs.primary.withOpacity(0.15),
           child: Icon(Icons.person, color: cs.primary),
@@ -137,32 +223,100 @@ class _SearchBar extends StatelessWidget {
 ========================================================= */
 
 class _StatsRow extends StatelessWidget {
-  const _StatsRow();
+  final String adminId;
+  const _StatsRow({required this.adminId});
 
   @override
   Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 16,
-      runSpacing: 16,
-      children: const [
-        _StatCard(icon: Icons.people, title: 'Total Residents', value: '124'),
-        _StatCard(
-          icon: Icons.bed,
-          title: 'Available Beds',
-          value: '18',
-          showProgress: true,
-        ),
-        _StatCard(
-          icon: Icons.currency_rupee,
-          title: 'Pending Fees',
-          value: '₹45,000',
-        ),
-        _StatCard(
-          icon: Icons.notifications_active,
-          title: 'Open Complaints',
-          value: '5',
-        ),
-      ],
+    final residentsStream = FirebaseFirestore.instance
+        .collection('residents')
+        .where('adminId', isEqualTo: adminId)
+        .snapshots();
+
+    final roomsStream = FirebaseFirestore.instance
+        .collectionGroup('rooms')
+        .where('adminId', isEqualTo: adminId)
+        .snapshots();
+
+    final complaintsStream = FirebaseFirestore.instance
+        .collection('complaints')
+        .where('adminId', isEqualTo: adminId)
+        .snapshots();
+
+    final paymentsStream = FirebaseFirestore.instance
+        .collection('payments')
+        .where('adminId', isEqualTo: adminId)
+        .snapshots();
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: residentsStream,
+      builder: (context, residentsSnap) {
+        final residentsDocs = residentsSnap.data?.docs ?? [];
+        final totalResidents = residentsDocs.length;
+        final pendingFees = _sumPendingFeesFromResidents(residentsDocs);
+
+        return StreamBuilder<QuerySnapshot>(
+          stream: roomsStream,
+          builder: (context, roomsSnap) {
+            final roomsDocs = roomsSnap.data?.docs ?? [];
+            final bedStats = _bedStats(roomsDocs);
+            final availableBeds = bedStats['available'] ?? 0;
+            final totalBeds = bedStats['total'] ?? 0;
+            final occupiedBeds = bedStats['occupied'] ?? 0;
+            final progressValue = totalBeds > 0
+                ? (occupiedBeds / totalBeds).clamp(0, 1).toDouble()
+                : 0.0;
+
+            return StreamBuilder<QuerySnapshot>(
+              stream: complaintsStream,
+              builder: (context, complaintsSnap) {
+                final complaintsDocs = complaintsSnap.data?.docs ?? [];
+                final openComplaints = complaintsDocs.length;
+
+                return StreamBuilder<QuerySnapshot>(
+                  stream: paymentsStream,
+                  builder: (context, paymentsSnap) {
+                    final paymentsDocs = paymentsSnap.data?.docs ?? [];
+                    final pendingFromPayments =
+                        _sumPendingFeesFromPayments(paymentsDocs);
+                    final pendingTotal =
+                        pendingFromPayments > 0 ? pendingFromPayments : pendingFees;
+
+                    return Wrap(
+                      spacing: 16,
+                      runSpacing: 16,
+                      children: [
+                        _StatCard(
+                          icon: Icons.people,
+                          title: 'Total Residents',
+                          value: totalResidents.toString(),
+                        ),
+                        _StatCard(
+                          icon: Icons.bed,
+                          title: 'Available Beds',
+                          value: availableBeds.toString(),
+                          showProgress: true,
+                          progressValue: progressValue,
+                        ),
+                        _StatCard(
+                          icon: Icons.currency_rupee,
+                          title: 'Pending Fees',
+                          value: '₹$pendingTotal',
+                        ),
+                        _StatCard(
+                          icon: Icons.notifications_active,
+                          title: 'Open Complaints',
+                          value: openComplaints.toString(),
+                        ),
+                      ],
+                    );
+                  },
+                );
+              },
+            );
+          },
+        );
+      },
     );
   }
 }
@@ -172,12 +326,14 @@ class _StatCard extends StatelessWidget {
   final String title;
   final String value;
   final bool showProgress;
+  final double? progressValue;
 
   const _StatCard({
     required this.icon,
     required this.title,
     required this.value,
     this.showProgress = false,
+    this.progressValue,
   });
 
   @override
@@ -202,7 +358,7 @@ class _StatCard extends StatelessWidget {
             if (showProgress) ...[
               const SizedBox(height: 10),
               LinearProgressIndicator(
-                value: 0.88,
+                value: progressValue ?? 0,
                 backgroundColor: Theme.of(context).dividerColor,
                 valueColor: AlwaysStoppedAnimation(cs.primary),
               ),
@@ -327,7 +483,7 @@ class _MainGrid extends StatelessWidget {
       children: [
         Expanded(flex: 6, child: _RecentResidents(adminId: adminId)),
         const SizedBox(width: 24),
-        const Expanded(flex: 4, child: _UpcomingDues()),
+        Expanded(flex: 4, child: _UpcomingDues(adminId: adminId)),
       ],
     );
   }
@@ -355,13 +511,15 @@ class _RecentResidents extends StatelessWidget {
             stream: FirebaseFirestore.instance
                 .collection('residents')
                 .where('adminId', isEqualTo: adminId)
-                .orderBy('createdAt', descending: true)
-                .limit(4)
+                .where('isAllocated', isEqualTo: true)
+                .orderBy('allocatedAt', descending: true)
+                .limit(5)
                 .snapshots(),
             builder: (context, snapshot) {
               if (snapshot.hasError) {
-                return Text(
-                  'Failed to load residents: ${snapshot.error}',
+                debugPrint('RECENT_RESIDENTS_ERROR: ${snapshot.error}');
+                return const Text(
+                  'Recent residents will appear once data is available.',
                   style: AppTextStyles.bodySmall,
                 );
               }
@@ -370,31 +528,9 @@ class _RecentResidents extends StatelessWidget {
               }
 
               if (snapshot.data!.docs.isEmpty) {
-                return FutureBuilder<QuerySnapshot>(
-                  future: FirebaseFirestore.instance
-                      .collection('residents')
-                      .where('ownerId', isEqualTo: adminId)
-                      .orderBy('createdAt', descending: true)
-                      .limit(4)
-                      .get(),
-                  builder: (context, legacySnap) {
-                    if (legacySnap.hasError) {
-                      return Text(
-                        'Failed to load residents: ${legacySnap.error}',
-                        style: AppTextStyles.bodySmall,
-                      );
-                    }
-                    if (!legacySnap.hasData) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-                    if (legacySnap.data!.docs.isEmpty) {
-                      return const Text(
-                        'No residents added yet',
-                        style: AppTextStyles.bodySmall,
-                      );
-                    }
-                    return _residentList(context, legacySnap.data!.docs);
-                  },
+                return const Text(
+                  'No allocated residents yet',
+                  style: AppTextStyles.bodySmall,
                 );
               }
 
@@ -412,17 +548,11 @@ class _RecentResidents extends StatelessWidget {
 ========================================================= */
 
 class _UpcomingDues extends StatelessWidget {
-  const _UpcomingDues();
+  final String adminId;
+  const _UpcomingDues({required this.adminId});
 
   @override
   Widget build(BuildContext context) {
-    final dues = [
-      ('Vikram Singh', '201A', '₹5,500', '2 days left', true),
-      ('Anjali Desai', '102B', '₹5,500', '3 days left', true),
-      ('Karan Mehta', '305C', '₹5,500', '5 days left', false),
-      ('Riya Kapoor', '204A', '₹5,500', '7 days left', false),
-    ];
-
     return Container(
       padding: const EdgeInsets.all(22),
       decoration: _card(context),
@@ -431,50 +561,88 @@ class _UpcomingDues extends StatelessWidget {
         children: [
           const Text('Upcoming Fee Dues', style: AppTextStyles.h3),
           const SizedBox(height: 18),
-          ...dues.map(
-            (d) => Padding(
-              padding: const EdgeInsets.only(bottom: 14),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+          StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('payments')
+                .where('adminId', isEqualTo: adminId)
+                .limit(5)
+                .snapshots(),
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return Text(
+                  'Failed to load dues: ${snapshot.error}',
+                  style: AppTextStyles.bodySmall,
+                );
+              }
+              if (!snapshot.hasData) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              if (snapshot.data!.docs.isEmpty) {
+                return const Text(
+                  'No dues data available',
+                  style: AppTextStyles.bodySmall,
+                );
+              }
+
+              return Column(
+                children: snapshot.data!.docs.map((doc) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  final name =
+                      data['residentName'] ?? data['fullName'] ?? 'Resident';
+                  final room = data['roomNumber'] ?? data['roomId'] ?? '-';
+                  final amount = _extractPaymentAmount(data);
+                  final status = data['status'] ?? data['paymentStatus'] ?? '';
+                  final isCritical = status.toString().toLowerCase() == 'pending';
+
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 14),
+                    child: Row(
                       children: [
-                        Text(d.$1, style: AppTextStyles.bodyMedium),
-                        Text('Room ${d.$2}', style: AppTextStyles.bodySmall),
-                      ],
-                    ),
-                  ),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(d.$3, style: AppTextStyles.bodyMedium),
-                      const SizedBox(height: 4),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: d.$5
-                              ? const Color(0xFFEF4444)
-                              : Theme.of(context).dividerColor,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text(
-                          d.$4,
-                          style: AppTextStyles.caption.copyWith(
-                            color: d.$5
-                                ? Colors.white
-                                : Theme.of(context).textTheme.bodyMedium!.color,
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(name, style: AppTextStyles.bodyMedium),
+                              Text('Room $room', style: AppTextStyles.bodySmall),
+                            ],
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text('₹$amount', style: AppTextStyles.bodyMedium),
+                            const SizedBox(height: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isCritical
+                                    ? const Color(0xFFEF4444)
+                                    : Theme.of(context).dividerColor,
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Text(
+                                status.toString().isEmpty ? '-' : status,
+                                style: AppTextStyles.caption.copyWith(
+                                  color: isCritical
+                                      ? Colors.white
+                                      : Theme.of(context)
+                                          .textTheme
+                                          .bodyMedium!
+                                          .color,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+              );
+            },
           ),
         ],
       ),
@@ -496,6 +664,70 @@ const _shadow = [
   BoxShadow(color: Color(0x11000000), blurRadius: 20, offset: Offset(0, 8)),
 ];
 
+int _sumPendingFeesFromResidents(List<QueryDocumentSnapshot> docs) {
+  int total = 0;
+  for (final doc in docs) {
+    final data = doc.data() as Map<String, dynamic>;
+    final status = data['status']?.toString().toLowerCase() ?? '';
+    if (status == 'pending') {
+      final monthlyFee = data['monthlyFee'];
+      if (monthlyFee is int) {
+        total += monthlyFee;
+      } else if (monthlyFee is String) {
+        total += int.tryParse(monthlyFee) ?? 0;
+      }
+    }
+  }
+  return total;
+}
+
+int _sumPendingFeesFromPayments(List<QueryDocumentSnapshot> docs) {
+  int total = 0;
+  for (final doc in docs) {
+    final data = doc.data() as Map<String, dynamic>;
+    final status = data['status']?.toString().toLowerCase() ??
+        data['paymentStatus']?.toString().toLowerCase() ??
+        '';
+    final isPending = status == 'pending' || data['isPaid'] == false;
+    if (isPending) {
+      total += _extractPaymentAmount(data);
+    }
+  }
+  return total;
+}
+
+int _extractPaymentAmount(Map<String, dynamic> data) {
+  final candidates = [
+    data['pendingAmount'],
+    data['dueAmount'],
+    data['amount'],
+  ];
+  for (final value in candidates) {
+    if (value is int) return value;
+    if (value is String) {
+      final parsed = int.tryParse(value);
+      if (parsed != null) return parsed;
+    }
+  }
+  return 0;
+}
+
+Map<String, int> _bedStats(List<QueryDocumentSnapshot> docs) {
+  int total = 0;
+  int occupied = 0;
+  for (final doc in docs) {
+    final data = doc.data() as Map<String, dynamic>;
+    final totalBeds = data['totalBeds'] ?? 0;
+    final occupiedBeds = data['occupiedBeds'] ?? 0;
+    final tb = totalBeds is int ? totalBeds : int.tryParse('$totalBeds') ?? 0;
+    final ob = occupiedBeds is int ? occupiedBeds : int.tryParse('$occupiedBeds') ?? 0;
+    total += tb;
+    occupied += ob;
+  }
+  final available = (total - occupied).clamp(0, total);
+  return {'total': total, 'occupied': occupied, 'available': available};
+}
+
 Widget _residentList(
   BuildContext context,
   List<QueryDocumentSnapshot> docs,
@@ -504,19 +736,19 @@ Widget _residentList(
     children: docs.map((doc) {
       final data = doc.data() as Map<String, dynamic>;
       final name = data['fullName'] ?? '';
-      final room = data['roomId'] ?? '-';
-      final status = data['status'] ?? 'pending';
-      final createdAt = data['createdAt'] as Timestamp?;
+      final allocation = data['allocationDetails'] as Map<String, dynamic>?;
+      final room = allocation?['roomNumber'] ?? data['roomId'] ?? '-';
+      final bed = allocation?['bedNumber'] ?? data['bedSlot'] ?? '-';
+      final allocatedAt = data['allocatedAt'] as Timestamp? ??
+          allocation?['allocatedAt'] as Timestamp?;
 
-      final date = createdAt != null
-          ? DateFormat('MMM dd, yyyy').format(createdAt.toDate())
+      final date = allocatedAt != null
+          ? DateFormat('MMM dd, yyyy').format(allocatedAt.toDate())
           : '';
 
       final initials = name.isNotEmpty
           ? name.trim().split(' ').take(2).map((e) => e[0]).join()
           : '?';
-
-      final isActive = status == 'active';
 
       return Padding(
         padding: const EdgeInsets.only(bottom: 14),
@@ -540,7 +772,7 @@ Widget _residentList(
                 children: [
                   Text(name, style: AppTextStyles.bodyMedium),
                   Text(
-                    'Room $room',
+                    'Room $room • Bed $bed',
                     style: AppTextStyles.bodySmall,
                   ),
                 ],
@@ -555,13 +787,11 @@ Widget _residentList(
                     vertical: 4,
                   ),
                   decoration: BoxDecoration(
-                    color: isActive
-                        ? const Color(0xFF10B981)
-                        : const Color(0xFFF59E0B),
+                    color: const Color(0xFF10B981),
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Text(
-                    isActive ? 'Active' : 'Pending',
+                    'Allocated',
                     style: AppTextStyles.label.copyWith(
                       color: Colors.white,
                     ),

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../theme/app_colors.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
+import 'login_screen.dart';
 
 class AddResidentScreen extends StatefulWidget {
   final String adminId;
@@ -15,138 +17,121 @@ class _AddResidentScreenState extends State<AddResidentScreen> {
   final _formKey = GlobalKey<FormState>();
   bool isSaving = false;
 
-  // ───────── PERSONAL ─────────
   final fullNameController = TextEditingController();
   final phoneController = TextEditingController();
   final emailController = TextEditingController();
-  String gender = '';
 
-  // ───────── RESIDENCY ─────────
-  String hostelId = '';
-  String floorId = '';
-  String roomId = '';
-  String bedId = '';
+  bool _isValidEmail(String email) {
+    return RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email);
+  }
 
-  List<Map<String, String>> hostels = [];
-  List<Map<String, String>> floors = [];
-  List<Map<String, String>> rooms = [];
-  List<Map<String, String>> beds = [];
+  bool _isValidPhone(String phone) {
+    final digits = phone.replaceAll(RegExp(r'\D'), '');
+    return digits.length == 10;
+  }
 
-  int selectedRoomTotalBeds = 0;
-  int selectedRoomOccupiedBeds = 0;
+  void _showDialog(String title, String message, {bool isError = false}) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
 
-  // ───────── PAYMENT ─────────
-  final depositController = TextEditingController();
-  final monthlyFeeController = TextEditingController();
-
-  // ───────── STATUS ─────────
-  String status = 'active';
+  bool get _canSubmit {
+    return !isSaving &&
+        fullNameController.text.trim().isNotEmpty &&
+        _isValidEmail(emailController.text.trim()) &&
+        _isValidPhone(phoneController.text.trim());
+  }
 
   @override
   void initState() {
     super.initState();
-    _loadHostels();
+    _ensureAdminAccess();
+    fullNameController.addListener(_refreshFormState);
+    phoneController.addListener(_refreshFormState);
+    emailController.addListener(_refreshFormState);
   }
 
-  /* ======================
-     FIRESTORE LOADERS
-  ====================== */
+  Future<void> _ensureAdminAccess() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      _redirectToLogin();
+      return;
+    }
 
-  Future<void> _loadHostels() async {
-    final snap = await FirebaseFirestore.instance
-        .collection('hostels')
-        .where('ownerId', isEqualTo: widget.adminId)
-        .get();
-    QuerySnapshot legacySnap = snap;
-    if (snap.docs.isEmpty) {
-      legacySnap = await FirebaseFirestore.instance
-          .collection('hostels')
-          .where('adminId', isEqualTo: widget.adminId)
+    try {
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
           .get();
-    }
-    setState(() {
-      hostels = legacySnap.docs
-          .map((d) => {'id': d.id, 'name': d['name'].toString()})
-          .toList();
-    });
-  }
-
-  Future<void> _loadFloors() async {
-    floors.clear();
-    rooms.clear();
-    beds.clear();
-
-    final snap = await FirebaseFirestore.instance
-        .collection('hostels')
-        .doc(hostelId)
-        .collection('floors')
-        .get();
-
-    setState(() {
-      floors = snap.docs
-          .map(
-            (d) => {'id': d.id, 'name': 'Floor ${(d['floorIndex'] ?? 0) + 1}'},
-          )
-          .toList();
-    });
-  }
-
-  Future<void> _loadRooms() async {
-    rooms.clear();
-    beds.clear();
-
-    final snap = await FirebaseFirestore.instance
-        .collection('hostels')
-        .doc(hostelId)
-        .collection('floors')
-        .doc(floorId)
-        .collection('rooms')
-        .get();
-
-    final List<Map<String, String>> availableRooms = [];
-
-    for (final r in snap.docs) {
-      final data = r.data();
-      final totalBeds = data['totalBeds'] ?? 0;
-      final occupiedBeds = data['occupiedBeds'] ?? 0;
-
-      if (occupiedBeds < totalBeds) {
-        availableRooms.add({
-          'id': r.id,
-          'name': 'Room ${data['roomNumber']}',
-          'totalBeds': totalBeds.toString(),
-          'occupiedBeds': occupiedBeds.toString(),
-        });
+      final role = userDoc.data()?['role'];
+      if (role != 'admin') {
+        await FirebaseAuth.instance.signOut();
+        if (!mounted) return;
+        await showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('Access Denied'),
+            content: const Text(
+              'This account is not authorized to invite residents.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+        _redirectToLogin();
       }
+    } catch (_) {
+      _redirectToLogin();
     }
-
-    setState(() => rooms = availableRooms);
   }
 
-  void _loadBeds() {
-    beds.clear();
-    final freeBeds = selectedRoomTotalBeds - selectedRoomOccupiedBeds;
+  void _redirectToLogin() {
+    if (!mounted) return;
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (_) => false,
+    );
+  }
 
-    setState(() {
-      beds = List.generate(
-        freeBeds,
-        (i) => {'id': 'bed_${i + 1}', 'name': 'Bed ${i + 1}'},
-      );
-    });
+  @override
+  void dispose() {
+    fullNameController.dispose();
+    phoneController.dispose();
+    emailController.dispose();
+    super.dispose();
+  }
+
+  void _refreshFormState() {
+    if (mounted) setState(() {});
   }
 
   /* ======================
-     SAVE RESIDENT
+     SAVE RESIDENT (INVITE ONLY)
+     YES: With strict role separation + invitation-only signup,
+     permission-denied errors from mixed roles are eliminated.
   ====================== */
-
   Future<void> _saveResident() async {
-    if (!_formKey.currentState!.validate() ||
-        hostelId.isEmpty ||
-        floorId.isEmpty ||
-        roomId.isEmpty ||
-        bedId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please fill all required fields')),
+    if (!_formKey.currentState!.validate()) {
+      _showDialog(
+        'Missing Details',
+        'Please fill all required fields.',
+        isError: true,
       );
       return;
     }
@@ -154,88 +139,75 @@ class _AddResidentScreenState extends State<AddResidentScreen> {
     setState(() => isSaving = true);
 
     try {
-      final batch = FirebaseFirestore.instance.batch();
-
-      final residentRef = FirebaseFirestore.instance
-          .collection('residents')
-          .doc();
-
-      final roomRef = FirebaseFirestore.instance
-          .collection('hostels')
-          .doc(hostelId)
-          .collection('floors')
-          .doc(floorId)
-          .collection('rooms')
-          .doc(roomId);
-
-      batch.set(residentRef, {
-        'adminId': widget.adminId,
+      // Store email in lowercase for consistent matching during signup
+      await FirebaseFirestore.instance.collection('residents').add({
+        'name': fullNameController.text.trim(),
         'fullName': fullNameController.text.trim(),
+        'email': emailController.text.trim().toLowerCase(),
         'phone': phoneController.text.trim(),
-        'email': emailController.text.trim(),
-        'gender': gender,
-        'hostelId': hostelId,
-        'floorId': floorId,
-        'roomId': roomId,
-        'bedSlot': bedId,
-        'deposit': int.tryParse(depositController.text) ?? 0,
-        'monthlyFee': int.tryParse(monthlyFeeController.text) ?? 0,
-        'status': status,
+        'status': 'invited',
+        'isAllocated': false,
+        'uid': null,
+        'adminId': widget.adminId,
         'createdAt': FieldValue.serverTimestamp(),
       });
 
-      batch.update(roomRef, {'occupiedBeds': FieldValue.increment(1)});
-      await batch.commit();
-
+      if (!mounted) return;
+      await showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Invitation Sent'),
+          content: const Text(
+            'Resident has been invited. They can sign up using this email.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
       if (mounted) Navigator.pop(context);
+    } on FirebaseException catch (e) {
+      debugPrint('INVITE_RESIDENT_ERROR: ${e.code} ${e.message}');
+      _showDialog(
+        'Invitation Failed',
+        e.message ?? 'Unable to invite resident.',
+        isError: true,
+      );
+    } catch (e) {
+      debugPrint('INVITE_RESIDENT_ERROR: $e');
+      _showDialog(
+        'Invitation Failed',
+        e.toString(),
+        isError: true,
+      );
     } finally {
       if (mounted) setState(() => isSaving = false);
     }
   }
 
-  /* ======================
-     UI HELPERS
-  ====================== */
-
   InputDecoration _input(BuildContext context, String hint) {
     final theme = Theme.of(context);
     return InputDecoration(
       hintText: hint,
+      hintStyle: theme.textTheme.bodySmall,
       filled: true,
-      fillColor: theme.colorScheme.surfaceVariant,
+      fillColor: theme.cardColor,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide.none,
+        borderSide: BorderSide(color: theme.dividerColor),
       ),
-    );
-  }
-
-  Widget _dropdown({
-    required BuildContext context,
-    required String value,
-    required String hint,
-    required List<Map<String, String>> items,
-    required ValueChanged<String?> onChanged,
-    bool enabled = true,
-  }) {
-    final theme = Theme.of(context);
-
-    return DropdownButtonFormField<String>(
-      value: value.isEmpty ? null : value,
-      decoration: _input(context, hint),
-      dropdownColor: theme.cardColor,
-      icon: const Icon(Icons.keyboard_arrow_down_rounded),
-      borderRadius: BorderRadius.circular(12),
-      menuMaxHeight: 260,
-      items: items
-          .map(
-            (e) => DropdownMenuItem(
-              value: e['id'],
-              child: Text(e['name']!, style: theme.textTheme.bodyMedium),
-            ),
-          )
-          .toList(),
-      onChanged: enabled ? onChanged : null,
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: theme.dividerColor),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: theme.colorScheme.primary, width: 1.6),
+      ),
     );
   }
 
@@ -243,36 +215,35 @@ class _AddResidentScreenState extends State<AddResidentScreen> {
     required BuildContext context,
     required String title,
     required IconData icon,
-    required Color accent,
+    required List<Color> headerGradient,
     required Widget child,
   }) {
-    final theme = Theme.of(context);
-
     return Container(
       margin: const EdgeInsets.only(bottom: 24),
       decoration: BoxDecoration(
-        color: theme.cardColor,
-        borderRadius: BorderRadius.circular(16),
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: const [
+          BoxShadow(color: Color(0x11000000), blurRadius: 18, offset: Offset(0, 8)),
+        ],
       ),
       child: Column(
         children: [
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: accent.withOpacity(.15),
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(16),
-              ),
+              gradient: LinearGradient(colors: headerGradient),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
             ),
             child: Row(
               children: [
-                Icon(icon, color: accent),
+                Icon(icon, color: headerGradient.last),
                 const SizedBox(width: 8),
                 Text(
                   title,
-                  style: theme.textTheme.bodyMedium!.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: Theme.of(context).textTheme.bodyMedium!.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
                 ),
               ],
             ),
@@ -283,239 +254,235 @@ class _AddResidentScreenState extends State<AddResidentScreen> {
     );
   }
 
-  /* ======================
-     BUILD
-  ====================== */
-
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(28),
+      backgroundColor: const Color(0xFFF5F7FB),
+      body: SafeArea(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            /// ───────── HEADER (RESTORED) ─────────
-            Row(
-              children: [
-                InkWell(
-                  onTap: () => widget.onBack != null
-                      ? widget.onBack!()
-                      : Navigator.pop(context),
-                  borderRadius: BorderRadius.circular(12),
-                  child: Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: theme.cardColor,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(Icons.arrow_back),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                boxShadow: [
+                  BoxShadow(
+                    color: Color(0x11000000),
+                    blurRadius: 12,
+                    offset: Offset(0, 6),
                   ),
-                ),
-                const SizedBox(width: 16),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
-                    Text(
-                      'Add Resident',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    SizedBox(height: 4),
-                    Text(
-                      'Dashboard → Residents → Add Resident',
-                      style: TextStyle(fontSize: 13, color: Colors.grey),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 32),
-
-            Form(
-              key: _formKey,
-              child: Column(
+                ],
+              ),
+              child: Row(
                 children: [
-                  _sectionCard(
-                    context: context,
-                    title: 'Personal Details',
-                    icon: Icons.person_outline,
-                    accent: AppColors.primary,
-                    child: Column(
-                      children: [
-                        TextFormField(
-                          controller: fullNameController,
-                          decoration: _input(context, 'Enter full name'),
-                          validator: (v) => v!.isEmpty ? 'Required' : null,
-                        ),
-                        const SizedBox(height: 16),
-                        _dropdown(
-                          context: context,
-                          value: gender,
-                          hint: 'Select gender',
-                          items: const [
-                            {'id': 'Male', 'name': 'Male'},
-                            {'id': 'Female', 'name': 'Female'},
-                            {'id': 'Other', 'name': 'Other'},
-                          ],
-                          onChanged: (v) => setState(() => gender = v ?? ''),
-                        ),
-                        const SizedBox(height: 16),
-                        TextFormField(
-                          controller: phoneController,
-                          decoration: _input(context, '+91 98765 43210'),
-                        ),
-                        const SizedBox(height: 16),
-                        TextFormField(
-                          controller: emailController,
-                          decoration: _input(context, 'resident@example.com'),
+                  InkWell(
+                    onTap: () => widget.onBack != null
+                        ? widget.onBack!()
+                        : Navigator.pop(context),
+                    borderRadius: BorderRadius.circular(10),
+                    child: const Padding(
+                      padding: EdgeInsets.all(6),
+                      child: Icon(Icons.arrow_back),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Color(0xFF4F46E5), Color(0xFF7C3AED)],
+                      ),
+                      borderRadius: BorderRadius.all(Radius.circular(12)),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Color(0x334F46E5),
+                          blurRadius: 10,
+                          offset: Offset(0, 6),
                         ),
                       ],
                     ),
+                    child: const Icon(Icons.person_add, color: Colors.white),
                   ),
-
-                  _sectionCard(
-                    context: context,
-                    title: 'Residency Details',
-                    icon: Icons.apartment,
-                    accent: Colors.teal,
-                    child: Column(
-                      children: [
-                        _dropdown(
-                          context: context,
-                          value: hostelId,
-                          hint: 'Select hostel',
-                          items: hostels,
-                          onChanged: (v) {
-                            hostelId = v!;
-                            floorId = roomId = bedId = '';
-                            _loadFloors();
-                            setState(() {});
-                          },
-                        ),
-                        const SizedBox(height: 16),
-                        _dropdown(
-                          context: context,
-                          value: floorId,
-                          hint: 'Select floor',
-                          items: floors,
-                          enabled: hostelId.isNotEmpty,
-                          onChanged: (v) {
-                            floorId = v!;
-                            roomId = bedId = '';
-                            _loadRooms();
-                            setState(() {});
-                          },
-                        ),
-                        const SizedBox(height: 16),
-                        _dropdown(
-                          context: context,
-                          value: roomId,
-                          hint: 'Select room',
-                          items: rooms,
-                          enabled: floorId.isNotEmpty,
-                          onChanged: (v) {
-                            final r = rooms.firstWhere((e) => e['id'] == v);
-                            roomId = v!;
-                            selectedRoomTotalBeds = int.parse(r['totalBeds']!);
-                            selectedRoomOccupiedBeds = int.parse(
-                              r['occupiedBeds']!,
-                            );
-                            _loadBeds();
-                            setState(() {});
-                          },
-                        ),
-                        const SizedBox(height: 16),
-                        _dropdown(
-                          context: context,
-                          value: bedId,
-                          hint: 'Select bed slot',
-                          items: beds,
-                          enabled: roomId.isNotEmpty,
-                          onChanged: (v) => setState(() => bedId = v!),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  _sectionCard(
-                    context: context,
-                    title: 'Payment Setup',
-                    icon: Icons.payments_outlined,
-                    accent: Colors.purple,
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: TextFormField(
-                            controller: depositController,
-                            decoration: _input(context, 'Deposit Amount'),
-                            keyboardType: TextInputType.number,
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: TextFormField(
-                            controller: monthlyFeeController,
-                            decoration: _input(context, 'Monthly Fee'),
-                            keyboardType: TextInputType.number,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  _sectionCard(
-                    context: context,
-                    title: 'Resident Status',
-                    icon: Icons.verified_user_outlined,
-                    accent: Colors.orange,
-                    child: Row(
-                      children: [
-                        ChoiceChip(
-                          label: const Text('Active'),
-                          selected: status == 'active',
-                          onSelected: (_) => setState(() => status = 'active'),
-                        ),
-                        const SizedBox(width: 12),
-                        ChoiceChip(
-                          label: const Text('Pending'),
-                          selected: status == 'pending',
-                          onSelected: (_) => setState(() => status = 'pending'),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  Row(
+                  const SizedBox(width: 12),
+                  const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: const Text('Cancel'),
+                      Text(
+                        'Add Resident',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF1E1B4B),
                         ),
                       ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: isSaving ? null : _saveResident,
-                          child: isSaving
-                              ? const CircularProgressIndicator()
-                              : const Text('Save Resident'),
-                        ),
+                      SizedBox(height: 4),
+                      Text(
+                        'Dashboard → Residents → Add Resident',
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
                       ),
                     ],
                   ),
                 ],
               ),
             ),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    children: [
+                      _sectionCard(
+                        context: context,
+                        title: 'Personal Details',
+                        icon: Icons.person,
+                        headerGradient: const [
+                          Color(0xFFEFF6FF),
+                          Color(0xFFEDE9FE),
+                        ],
+                        child: Column(
+                          children: [
+                            _fieldLabel('Full Name *'),
+                            TextFormField(
+                              controller: fullNameController,
+                              decoration: _input(context, 'Enter full name'),
+                              validator: (v) => v!.isEmpty ? 'Required' : null,
+                            ),
+                            const SizedBox(height: 16),
+                            _fieldLabel('Phone Number *', icon: Icons.phone),
+                            TextFormField(
+                              controller: phoneController,
+                              decoration: _input(context, '+91 98765 43210'),
+                              validator: (v) {
+                                if (v == null || v.trim().isEmpty) {
+                                  return 'Required';
+                                }
+                                return _isValidPhone(v)
+                                    ? null
+                                    : 'Enter a valid 10-digit phone number';
+                              },
+                            ),
+                            const SizedBox(height: 16),
+                            _fieldLabel('Email Address *', icon: Icons.mail),
+                            TextFormField(
+                              controller: emailController,
+                              decoration: _input(context, 'resident@example.com'),
+                              validator: (v) {
+                                if (v == null || v.trim().isEmpty) {
+                                  return 'Required';
+                                }
+                                return _isValidEmail(v)
+                                    ? null
+                                    : 'Enter a valid email';
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        margin: const EdgeInsets.only(bottom: 20),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEFF6FF),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: const Color(0xFFBFDBFE)),
+                        ),
+                        child: const Row(
+                          children: [
+                            Icon(Icons.info_outline, color: Color(0xFF2563EB)),
+                            SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                'This action invites the resident. They must sign up using the same email to activate their account.',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFF1E3A8A),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () => Navigator.pop(context),
+                              icon: const Icon(Icons.close),
+                              label: const Text('Cancel'),
+                              style: OutlinedButton.styleFrom(
+                                minimumSize: const Size.fromHeight(50),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 18,
+                                  vertical: 14,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                side: const BorderSide(color: Color(0xFFD1D5DB)),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: _canSubmit ? _saveResident : null,
+                              icon: isSaving
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        valueColor: AlwaysStoppedAnimation<Color>(
+                                          Colors.white,
+                                        ),
+                                      ),
+                                    )
+                                  : const Icon(Icons.send),
+                              label: Text(isSaving ? 'Sending...' : 'Send Invite'),
+                              style: ElevatedButton.styleFrom(
+                                minimumSize: const Size.fromHeight(50),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 18,
+                                  vertical: 14,
+                                ),
+                                backgroundColor: const Color(0xFF4F46E5),
+                                disabledBackgroundColor: const Color(0xFF9CA3AF),
+                                foregroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _fieldLabel(String text, {IconData? icon}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 16, color: Colors.grey),
+            const SizedBox(width: 6),
+          ],
+          Text(
+            text,
+            style: const TextStyle(fontSize: 13, color: Color(0xFF374151)),
+          ),
+        ],
       ),
     );
   }

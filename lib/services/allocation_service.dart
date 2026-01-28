@@ -33,7 +33,7 @@ class AllocationService {
       final bedData = bedSnapshot.data() as Map<String, dynamic>;
 
       // 2️⃣ Prevent double booking
-      if (bedData['occupied'] == true) {
+      if (bedData['isOccupied'] == true) {
         throw Exception('Bed already occupied');
       }
 
@@ -46,20 +46,29 @@ class AllocationService {
       final residentData = residentSnapshot.data() as Map<String, dynamic>;
 
       // Extra safety: prevent double allocation
-      if (residentData['allocationStatus'] == 'allocated') {
+      if (residentData['isAllocated'] == true) {
         throw Exception('Resident already allocated');
       }
 
       // 4️⃣ Update bed
-      transaction.update(bedRef, {'occupied': true, 'residentId': residentId});
+      transaction.update(
+        bedRef,
+        {'isOccupied': true, 'occupiedBy': residentId, 'residentId': residentId},
+      );
 
       // 5️⃣ Update resident
       transaction.update(residentRef, {
-        'allocationStatus': 'allocated',
+        'isAllocated': true,
         'hostelId': hostelId,
         'floorId': floorId,
         'roomId': roomId,
-        'bedId': bedId,
+        'bedSlot': bedId,
+        'allocationDetails': {
+          'hostelId': hostelId,
+          'floorId': floorId,
+          'roomId': roomId,
+          'bedSlot': bedId,
+        },
       });
     });
   }
