@@ -7,6 +7,7 @@ import '../main.dart';
 import 'login_screen.dart';
 import 'hostel_management_screen.dart';
 import 'add_resident_screen.dart';
+import 'allocate_resident_screen.dart';
 import '../theme/app_text_styles.dart';
 
 class AdminDashboard extends StatefulWidget {
@@ -87,9 +88,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
     final date = DateFormat('MMM dd, yyyy').format(DateTime.now());
 
     if (!_checkedRole || _adminId == null) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     final adminId = _adminId!;
@@ -277,10 +276,12 @@ class _StatsRow extends StatelessWidget {
                   stream: paymentsStream,
                   builder: (context, paymentsSnap) {
                     final paymentsDocs = paymentsSnap.data?.docs ?? [];
-                    final pendingFromPayments =
-                        _sumPendingFeesFromPayments(paymentsDocs);
-                    final pendingTotal =
-                        pendingFromPayments > 0 ? pendingFromPayments : pendingFees;
+                    final pendingFromPayments = _sumPendingFeesFromPayments(
+                      paymentsDocs,
+                    );
+                    final pendingTotal = pendingFromPayments > 0
+                        ? pendingFromPayments
+                        : pendingFees;
 
                     return Wrap(
                       spacing: 16,
@@ -410,10 +411,18 @@ Widget _QuickActions(BuildContext context, String adminId) {
               );
             },
           ),
-          const _ActionButton(
+          _ActionButton(
             label: 'Allocate Room',
             icon: Icons.meeting_room,
             gradient: [Color(0xFF0D9488), Color(0xFF06B6D4)],
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => AllocateResidentScreen(adminId: adminId),
+                ),
+              );
+            },
           ),
           const _ActionButton(
             label: 'Send Notice',
@@ -592,7 +601,8 @@ class _UpcomingDues extends StatelessWidget {
                   final room = data['roomNumber'] ?? data['roomId'] ?? '-';
                   final amount = _extractPaymentAmount(data);
                   final status = data['status'] ?? data['paymentStatus'] ?? '';
-                  final isCritical = status.toString().toLowerCase() == 'pending';
+                  final isCritical =
+                      status.toString().toLowerCase() == 'pending';
 
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 14),
@@ -603,7 +613,10 @@ class _UpcomingDues extends StatelessWidget {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(name, style: AppTextStyles.bodyMedium),
-                              Text('Room $room', style: AppTextStyles.bodySmall),
+                              Text(
+                                'Room $room',
+                                style: AppTextStyles.bodySmall,
+                              ),
                             ],
                           ),
                         ),
@@ -628,10 +641,9 @@ class _UpcomingDues extends StatelessWidget {
                                 style: AppTextStyles.caption.copyWith(
                                   color: isCritical
                                       ? Colors.white
-                                      : Theme.of(context)
-                                          .textTheme
-                                          .bodyMedium!
-                                          .color,
+                                      : Theme.of(
+                                          context,
+                                        ).textTheme.bodyMedium!.color,
                                 ),
                               ),
                             ),
@@ -685,7 +697,8 @@ int _sumPendingFeesFromPayments(List<QueryDocumentSnapshot> docs) {
   int total = 0;
   for (final doc in docs) {
     final data = doc.data() as Map<String, dynamic>;
-    final status = data['status']?.toString().toLowerCase() ??
+    final status =
+        data['status']?.toString().toLowerCase() ??
         data['paymentStatus']?.toString().toLowerCase() ??
         '';
     final isPending = status == 'pending' || data['isPaid'] == false;
@@ -697,11 +710,7 @@ int _sumPendingFeesFromPayments(List<QueryDocumentSnapshot> docs) {
 }
 
 int _extractPaymentAmount(Map<String, dynamic> data) {
-  final candidates = [
-    data['pendingAmount'],
-    data['dueAmount'],
-    data['amount'],
-  ];
+  final candidates = [data['pendingAmount'], data['dueAmount'], data['amount']];
   for (final value in candidates) {
     if (value is int) return value;
     if (value is String) {
@@ -720,7 +729,9 @@ Map<String, int> _bedStats(List<QueryDocumentSnapshot> docs) {
     final totalBeds = data['totalBeds'] ?? 0;
     final occupiedBeds = data['occupiedBeds'] ?? 0;
     final tb = totalBeds is int ? totalBeds : int.tryParse('$totalBeds') ?? 0;
-    final ob = occupiedBeds is int ? occupiedBeds : int.tryParse('$occupiedBeds') ?? 0;
+    final ob = occupiedBeds is int
+        ? occupiedBeds
+        : int.tryParse('$occupiedBeds') ?? 0;
     total += tb;
     occupied += ob;
   }
@@ -728,10 +739,7 @@ Map<String, int> _bedStats(List<QueryDocumentSnapshot> docs) {
   return {'total': total, 'occupied': occupied, 'available': available};
 }
 
-Widget _residentList(
-  BuildContext context,
-  List<QueryDocumentSnapshot> docs,
-) {
+Widget _residentList(BuildContext context, List<QueryDocumentSnapshot> docs) {
   return Column(
     children: docs.map((doc) {
       final data = doc.data() as Map<String, dynamic>;
@@ -739,7 +747,8 @@ Widget _residentList(
       final allocation = data['allocationDetails'] as Map<String, dynamic>?;
       final room = allocation?['roomNumber'] ?? data['roomId'] ?? '-';
       final bed = allocation?['bedNumber'] ?? data['bedSlot'] ?? '-';
-      final allocatedAt = data['allocatedAt'] as Timestamp? ??
+      final allocatedAt =
+          data['allocatedAt'] as Timestamp? ??
           allocation?['allocatedAt'] as Timestamp?;
 
       final date = allocatedAt != null
@@ -760,9 +769,7 @@ Widget _residentList(
               ).colorScheme.primary.withOpacity(0.15),
               child: Text(
                 initials,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.primary,
-                ),
+                style: TextStyle(color: Theme.of(context).colorScheme.primary),
               ),
             ),
             const SizedBox(width: 12),
@@ -771,10 +778,7 @@ Widget _residentList(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(name, style: AppTextStyles.bodyMedium),
-                  Text(
-                    'Room $room • Bed $bed',
-                    style: AppTextStyles.bodySmall,
-                  ),
+                  Text('Room $room • Bed $bed', style: AppTextStyles.bodySmall),
                 ],
               ),
             ),
@@ -792,9 +796,7 @@ Widget _residentList(
                   ),
                   child: Text(
                     'Allocated',
-                    style: AppTextStyles.label.copyWith(
-                      color: Colors.white,
-                    ),
+                    style: AppTextStyles.label.copyWith(color: Colors.white),
                   ),
                 ),
                 const SizedBox(height: 4),
