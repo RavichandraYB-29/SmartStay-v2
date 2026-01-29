@@ -25,6 +25,15 @@
         { "fieldPath": "allocatedAt", "order": "DESCENDING" }
       ]
     }
+  ,
+  {
+    "collectionGroup": "payments",
+    "queryScope": "COLLECTION",
+    "fields": [
+      { "fieldPath": "adminId", "order": "ASCENDING" },
+      { "fieldPath": "dueDate", "order": "ASCENDING" }
+    ]
+  }
   ],
   "fieldOverrides": []
 }
