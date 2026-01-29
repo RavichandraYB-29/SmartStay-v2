@@ -29,10 +29,10 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isSignedIn()
-        && (
-          (userExists() && userDoc().data.role == 'admin')
-          || adminExists()
+      return isSignedIn() &&
+        (
+          (userExists() && userDoc().data.role == 'admin') ||
+          adminExists()
         );
     }
 
@@ -74,7 +74,6 @@ service cloud.firestore {
         );
     }
 
-
     function isHostelOwner(hostelId) {
       let hostel = get(hostelPath(hostelId));
       return isSignedIn()
@@ -85,7 +84,7 @@ service cloud.firestore {
         );
     }
 
-    /* ───────── ASSIGNMENT HELPERS (UNCHANGED) ───────── */
+    /* ───────── ASSIGNMENT HELPERS ───────── */
 
     function isAssignedToHostel(hostelId) {
       return isResident()
@@ -93,8 +92,8 @@ service cloud.firestore {
         && residentDocForUser().data.isAllocated == true
         && (
           (residentDocForUser().data.allocationDetails != null
-              ? residentDocForUser().data.allocationDetails.hostelId
-              : residentDocForUser().data.hostelId) == hostelId
+            ? residentDocForUser().data.allocationDetails.hostelId
+            : residentDocForUser().data.hostelId) == hostelId
         );
     }
 
@@ -104,35 +103,37 @@ service cloud.firestore {
         && residentDocForUser().data.isAllocated == true
         && (
           (residentDocForUser().data.allocationDetails != null
-              ? residentDocForUser().data.allocationDetails.hostelId
-              : residentDocForUser().data.hostelId) == hostelId
+            ? residentDocForUser().data.allocationDetails.hostelId
+            : residentDocForUser().data.hostelId) == hostelId
         )
         && (
           (residentDocForUser().data.allocationDetails != null
-              ? residentDocForUser().data.allocationDetails.floorId
-              : residentDocForUser().data.floorId) == floorId
+            ? residentDocForUser().data.allocationDetails.floorId
+            : residentDocForUser().data.floorId) == floorId
         )
         && (
           (residentDocForUser().data.allocationDetails != null
-              ? residentDocForUser().data.allocationDetails.roomId
-              : residentDocForUser().data.roomId) == roomId
+            ? residentDocForUser().data.allocationDetails.roomId
+            : residentDocForUser().data.roomId) == roomId
         );
     }
 
     /* ───────── GENERIC OWNERSHIP ───────── */
 
     function isAdminOwner(data) {
-      return isAdmin() && (
-        data.adminId == request.auth.uid ||
-        (data.ownerId != null && data.ownerId == request.auth.uid)
-      );
+      return isAdmin() &&
+        (
+          data.adminId == request.auth.uid ||
+          (data.ownerId != null && data.ownerId == request.auth.uid)
+        );
     }
 
     function isOwner(data) {
-      return isSignedIn() && (
-        data.adminId == request.auth.uid ||
-        (data.ownerId != null && data.ownerId == request.auth.uid)
-      );
+      return isSignedIn() &&
+        (
+          data.adminId == request.auth.uid ||
+          (data.ownerId != null && data.ownerId == request.auth.uid)
+        );
     }
 
     function isSelf(data) {
@@ -147,11 +148,8 @@ service cloud.firestore {
         && request.resource.data.email == request.auth.token.email
         && (request.resource.data.role == 'admin'
           || request.resource.data.role == 'resident');
-      allow read: if isSignedIn() && userId == request.auth.uid;
-      allow update: if isSignedIn()
-        && userId == request.auth.uid
-        && request.resource.data.role == resource.data.role
-        && request.resource.data.email == request.auth.token.email;
+
+      allow read, update: if isSignedIn() && userId == request.auth.uid;
     }
 
     /* ───────── HOSTELS ───────── */
@@ -160,46 +158,54 @@ service cloud.firestore {
       allow create: if isAdmin()
         && request.resource.data.adminId == request.auth.uid;
 
-      allow read: if isOwner(resource.data)
-        || isAssignedToHostel(hostelId);
+      allow read: if isAdmin() || isHostelOwner(hostelId);
 
       allow update, delete: if isAdminOwner(resource.data);
 
       match /floors/{floorId} {
         allow create, update, delete: if isHostelAdmin(hostelId);
-        allow read: if isHostelOwner(hostelId)
+
+        allow read: if isAdmin()
+          || isHostelOwner(hostelId)
           || isAssignedToHostel(hostelId);
 
         match /rooms/{roomId} {
           allow create, update, delete: if isHostelAdmin(hostelId);
-          allow read: if isHostelOwner(hostelId)
+
+          // 🔑 THIS ENABLES collectionGroup('rooms')
+          allow read: if isAdmin()
+            || isHostelOwner(hostelId)
             || isAssignedToRoom(hostelId, floorId, roomId);
 
           match /beds/{bedId} {
             allow create: if isHostelAdmin(hostelId);
+
             allow update: if isHostelAdmin(hostelId)
               && request.resource.data.diff(resource.data).changedKeys()
                 .hasOnly(['isOccupied', 'occupiedBy', 'residentId']);
+
             allow delete: if isHostelAdmin(hostelId);
-            allow read: if isHostelOwner(hostelId)
+
+            allow read: if isAdmin()
+              || isHostelOwner(hostelId)
               || isAssignedToRoom(hostelId, floorId, roomId);
           }
         }
       }
     }
 
-    /* ───────── RESIDENTS (FIXED FOR QUERY COMPATIBILITY) ───────── */
+    /* ───────── RESIDENTS (INVITE + SIGNUP LOGIC PRESERVED) ───────── */
 
     match /residents/{residentId} {
 
-      // Admin creates resident invite
+      // Admin creates invite
       allow create: if isAdmin()
         && request.resource.data.adminId == request.auth.uid
         && request.resource.data.status == 'invited'
         && request.resource.data.isAllocated == false
         && request.resource.data.uid == null;
 
-      // Admin / owner full control
+      // Admin / owner access
       allow read, update, delete: if isAdminOwner(resource.data)
         || isOwner(resource.data)
         || (
@@ -207,26 +213,16 @@ service cloud.firestore {
           && isHostelAdmin(resource.data.hostelId)
         );
 
-      // Admin can allocate/update resident assignment details
-      allow update: if isAdmin()
-        && request.resource.data.adminId == request.auth.uid
-        && request.resource.data.isAllocated == true
-        && request.resource.data.allocationDetails != null
-        && request.resource.data.hostelId != null
-        && isHostelAdmin(request.resource.data.hostelId);
-
-      // ✅ Resident can READ their own resident record (by uid)
+      // Resident reads own record
       allow read: if isSignedIn()
         && resource.data.uid == request.auth.uid;
 
-      // ✅ Signed-in user can read INVITED residents matching their email
-      // This enables the signup query: where('email', ==, authEmail).where('status', ==, 'invited')
-      // The query MUST include status=='invited' filter for this rule to allow access
+      // Invite lookup during signup
       allow read: if isSignedIn()
         && resource.data.status == 'invited'
         && resource.data.email == request.auth.token.email;
 
-      // ✅ Resident can LINK invite during signup (update unclaimed invite)
+      // Link invite → registered resident
       allow update: if isSignedIn()
         && resource.data.uid == null
         && resource.data.status == 'invited'

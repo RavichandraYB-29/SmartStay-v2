@@ -248,40 +248,41 @@ class _StatsRow extends StatelessWidget {
         .snapshots();
 
     return StreamBuilder<QuerySnapshot>(
-      stream: residentsStream,
-      builder: (context, residentsSnap) {
-        final residentsDocs = residentsSnap.data?.docs ?? [];
-        final totalResidents = residentsDocs.length;
-        final pendingFees = _sumPendingFeesFromResidents(residentsDocs);
+      stream: roomsStream,
+      builder: (context, roomsSnap) {
+        final roomsDocs = roomsSnap.data?.docs ?? [];
+        final totalBeds = _totalBedsFromRooms(roomsDocs);
+        final occupiedBeds = _occupiedBedsFromRooms(roomsDocs);
 
         return StreamBuilder<QuerySnapshot>(
-          stream: roomsStream,
-          builder: (context, roomsSnap) {
-            final roomsDocs = roomsSnap.data?.docs ?? [];
-            final bedStats = _bedStats(roomsDocs);
-            final availableBeds = bedStats['available'] ?? 0;
-            final totalBeds = bedStats['total'] ?? 0;
-            final occupiedBeds = bedStats['occupied'] ?? 0;
-            final progressValue = totalBeds > 0
-                ? (occupiedBeds / totalBeds).clamp(0, 1).toDouble()
-                : 0.0;
+          stream: residentsStream,
+          builder: (context, residentsSnap) {
+            final residentsDocs = residentsSnap.data?.docs ?? [];
+            final totalResidents = residentsDocs.length;
+
+            final availableBeds = (totalBeds - occupiedBeds).clamp(
+              0,
+              totalBeds,
+            );
 
             return StreamBuilder<QuerySnapshot>(
               stream: complaintsStream,
               builder: (context, complaintsSnap) {
-                final complaintsDocs = complaintsSnap.data?.docs ?? [];
-                final openComplaints = complaintsDocs.length;
+                final openComplaints = complaintsSnap.data?.docs.length ?? 0;
 
                 return StreamBuilder<QuerySnapshot>(
                   stream: paymentsStream,
                   builder: (context, paymentsSnap) {
-                    final paymentsDocs = paymentsSnap.data?.docs ?? [];
                     final pendingFromPayments = _sumPendingFeesFromPayments(
-                      paymentsDocs,
+                      paymentsSnap.data?.docs ?? [],
                     );
+                    final pendingFromResidents = _sumPendingFeesFromResidents(
+                      residentsDocs,
+                    );
+
                     final pendingTotal = pendingFromPayments > 0
                         ? pendingFromPayments
-                        : pendingFees;
+                        : pendingFromResidents;
 
                     return Wrap(
                       spacing: 16,
@@ -297,7 +298,9 @@ class _StatsRow extends StatelessWidget {
                           title: 'Available Beds',
                           value: availableBeds.toString(),
                           showProgress: true,
-                          progressValue: progressValue,
+                          progressValue: totalBeds == 0
+                              ? 0
+                              : occupiedBeds / totalBeds,
                         ),
                         _StatCard(
                           icon: Icons.currency_rupee,
@@ -521,9 +524,9 @@ class _RecentResidents extends StatelessWidget {
                 .collection('residents')
                 .where('adminId', isEqualTo: adminId)
                 .where('isAllocated', isEqualTo: true)
-                .orderBy('allocatedAt', descending: true)
                 .limit(5)
                 .snapshots(),
+
             builder: (context, snapshot) {
               if (snapshot.hasError) {
                 debugPrint('RECENT_RESIDENTS_ERROR: ${snapshot.error}');
@@ -721,22 +724,26 @@ int _extractPaymentAmount(Map<String, dynamic> data) {
   return 0;
 }
 
-Map<String, int> _bedStats(List<QueryDocumentSnapshot> docs) {
+int _totalBedsFromRooms(List<QueryDocumentSnapshot> docs) {
   int total = 0;
-  int occupied = 0;
   for (final doc in docs) {
     final data = doc.data() as Map<String, dynamic>;
-    final totalBeds = data['totalBeds'] ?? 0;
-    final occupiedBeds = data['occupiedBeds'] ?? 0;
-    final tb = totalBeds is int ? totalBeds : int.tryParse('$totalBeds') ?? 0;
-    final ob = occupiedBeds is int
-        ? occupiedBeds
-        : int.tryParse('$occupiedBeds') ?? 0;
-    total += tb;
-    occupied += ob;
+    final beds = data['totalBeds'];
+    if (beds is int) total += beds;
+    if (beds is String) total += int.tryParse(beds) ?? 0;
   }
-  final available = (total - occupied).clamp(0, total);
-  return {'total': total, 'occupied': occupied, 'available': available};
+  return total;
+}
+
+int _occupiedBedsFromRooms(List<QueryDocumentSnapshot> docs) {
+  int total = 0;
+  for (final doc in docs) {
+    final data = doc.data() as Map<String, dynamic>;
+    final occupied = data['occupiedBeds'];
+    if (occupied is int) total += occupied;
+    if (occupied is String) total += int.tryParse(occupied) ?? 0;
+  }
+  return total;
 }
 
 Widget _residentList(BuildContext context, List<QueryDocumentSnapshot> docs) {
