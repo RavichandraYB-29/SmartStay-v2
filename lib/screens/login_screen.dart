@@ -10,6 +10,7 @@ import '../theme/app_text_styles.dart';
 
 import 'admin_dashboard.dart';
 import 'resident_dashboard.dart';
+import 'set_password_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -172,9 +173,9 @@ class _LoginScreenState extends State<LoginScreen> {
         final residentDoc = residentSnap.docs.isNotEmpty
             ? residentSnap.docs.first
             : await FirebaseFirestore.instance
-                .collection('residents')
-                .doc('_missing')
-                .get();
+                  .collection('residents')
+                  .doc('_missing')
+                  .get();
 
         if (!residentDoc.exists) {
           await FirebaseAuth.instance.signOut();
@@ -249,6 +250,16 @@ class _LoginScreenState extends State<LoginScreen> {
   /* ====================== REGISTER ====================== */
 
   Future<void> registerUser() async {
+    if (selectedRole == 'resident') {
+      _showAuthDialog(
+        title: 'Residents Cannot Self‑Register',
+        message:
+            'Residents must be invited by an admin. Please log in with your invited email after verification.',
+        isError: true,
+      );
+      return;
+    }
+
     if (nameController.text.isEmpty ||
         emailController.text.isEmpty ||
         phoneController.text.isEmpty ||
@@ -294,123 +305,8 @@ class _LoginScreenState extends State<LoginScreen> {
     User? createdUser;
 
     try {
-      /// 🔐 RESIDENT REGISTRATION (INVITE ONLY)
-      if (selectedRole == 'resident') {
-        final inputEmail = emailController.text.trim().toLowerCase();
-        
-        // STEP 1: Create Firebase Auth user first (required to query Firestore)
-        debugPrint('RESIDENT_SIGNUP: Creating auth user for $inputEmail');
-        final cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(
-          email: inputEmail,
-          password: passwordController.text.trim(),
-        );
-        createdUser = cred.user;
-        final currentUser = cred.user!;
-        
-        // STEP 2: Send verification email immediately
-        if (!currentUser.emailVerified) {
-          final sent = await _sendVerificationEmail(currentUser);
-          if (!sent) {
-            await currentUser.delete();
-            createdUser = null;
-            return;
-          }
-        }
-        
-        // STEP 3: Query for matching invite (user is now signed in)
-        // Use currentUser.email to ensure it matches request.auth.token.email
-        debugPrint('RESIDENT_SIGNUP: Querying invite for email=${currentUser.email}');
-        
-        QuerySnapshot<Map<String, dynamic>> inviteSnap;
-        try {
-          inviteSnap = await FirebaseFirestore.instance
-              .collection('residents')
-              .where('email', isEqualTo: currentUser.email)
-              .where('status', isEqualTo: 'invited')
-              .limit(1)
-              .get();
-        } catch (e) {
-          debugPrint('RESIDENT_SIGNUP: Query failed: $e');
-          await currentUser.delete();
-          createdUser = null;
-          _showAuthDialog(
-            title: 'Registration Failed',
-            message: 'Unable to verify invite. Please try again.',
-            isError: true,
-          );
-          return;
-        }
-        
-        if (inviteSnap.docs.isEmpty) {
-          debugPrint('RESIDENT_SIGNUP: No invite found, deleting auth user');
-          await currentUser.delete();
-          createdUser = null;
-          _showAuthDialog(
-            title: 'Not Invited',
-            message: 'You are not invited. Please contact the admin.',
-            isError: true,
-          );
-          return;
-        }
-        
-        final inviteDoc = inviteSnap.docs.first;
-        final inviteData = inviteDoc.data();
-        
-        // Verify invite is valid (double-check status and uid)
-        if (inviteData['uid'] != null) {
-          debugPrint('RESIDENT_SIGNUP: Invite already claimed');
-          await currentUser.delete();
-          createdUser = null;
-          _showAuthDialog(
-            title: 'Already Claimed',
-            message: 'This invite is already linked to another account.',
-            isError: true,
-          );
-          return;
-        }
-        
-        // STEP 4: Link the invite to this auth user
-        debugPrint('RESIDENT_SIGNUP: Linking invite ${inviteDoc.id} to uid=${currentUser.uid}');
-        try {
-          await inviteDoc.reference.update({
-            'uid': currentUser.uid,
-            'status': 'registered',
-            'name': nameController.text.trim(),
-            'fullName': nameController.text.trim(),
-            'phone': phoneController.text.trim(),
-          });
-        } catch (e) {
-          debugPrint('RESIDENT_SIGNUP: Failed to update invite: $e');
-          await currentUser.delete();
-          createdUser = null;
-          _showAuthDialog(
-            title: 'Registration Failed',
-            message: 'Unable to link your account. Please try again.',
-            isError: true,
-          );
-          return;
-        }
-
-        final residentId = inviteDoc.id;
-
-        // STEP 5: Create user profile document
-        debugPrint('RESIDENT_SIGNUP: Creating user profile');
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(currentUser.uid)
-            .set({
-              'name': nameController.text.trim(),
-              'email': currentUser.email,
-              'phone': phoneController.text.trim(),
-              'role': 'resident',
-              'residentId': residentId,
-              'createdAt': FieldValue.serverTimestamp(),
-            });
-        
-        debugPrint('RESIDENT_SIGNUP: Success');
-      }
       /// 🔐 ADMIN REGISTRATION
-      else {
+      {
         final cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(
           email: emailController.text.trim(),
           password: passwordController.text.trim(),
@@ -440,8 +336,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
       _showAuthDialog(
         title: 'Success',
-        message:
-            'Account created. Please verify your email before logging in.',
+        message: 'Account created. Please verify your email before logging in.',
       );
 
       // Do not sign out before verification request completes.
@@ -513,7 +408,7 @@ class _LoginScreenState extends State<LoginScreen> {
       }
 
       final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: loginEmailController.text.trim(),
+        email: loginEmailController.text.trim().toLowerCase(),
         password: loginPasswordController.text.trim(),
       );
 
@@ -533,51 +428,31 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
 
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(cred.user!.uid)
-          .get();
+      // Admin flow (uses users collection)
+      if (selectedRole == 'admin') {
+        final userDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(cred.user!.uid)
+            .get();
 
-      if (!userDoc.exists) {
-        await FirebaseAuth.instance.signOut();
-        _showAuthDialog(
-          title: 'Access Denied',
-          message: 'User profile not found. Contact admin.',
-          isError: true,
-        );
-        return;
-      }
-
-      final role = userDoc['role'];
-      if (role != 'admin' && role != 'resident') {
-        await FirebaseAuth.instance.signOut();
-        _showAuthDialog(
-          title: 'Access Denied',
-          message: 'This account is not authorized to access this portal.',
-          isError: true,
-        );
-        return;
-      }
-
-      if (selectedRole != role) {
-        await FirebaseAuth.instance.signOut();
-        _showAuthDialog(
-          title: 'Access Denied',
-          message: 'This account is not authorized to access this portal.',
-          isError: true,
-        );
-        return;
-      }
-
-      if (role == 'admin') {
+        if (!userDoc.exists || userDoc['role'] != 'admin') {
+          await FirebaseAuth.instance.signOut();
+          _showAuthDialog(
+            title: 'Access Denied',
+            message: 'This account is not authorized to access this portal.',
+            isError: true,
+          );
+          return;
+        }
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (_) => const AdminDashboard()),
         );
       } else {
+        // Resident flow (uses residents collection with authUid)
         final residentSnap = await FirebaseFirestore.instance
             .collection('residents')
-            .where('uid', isEqualTo: cred.user!.uid)
+            .where('authUid', isEqualTo: cred.user!.uid)
             .limit(1)
             .get();
 
@@ -591,17 +466,63 @@ class _LoginScreenState extends State<LoginScreen> {
           return;
         }
 
+        final residentRef = residentSnap.docs.first.reference;
+        final residentData = residentSnap.docs.first.data();
+
+        if (residentData['role'] != null &&
+            residentData['role'].toString() != 'resident') {
+          await FirebaseAuth.instance.signOut();
+          _showAuthDialog(
+            title: 'Access Denied',
+            message: 'This account is not authorized to access this portal.',
+            isError: true,
+          );
+          return;
+        }
+
+        if (residentData['status'] == 'invited') {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => SetPasswordScreen(
+                residentId: residentRef.id,
+                authUid: cred.user!.uid,
+                email: cred.user!.email ?? '',
+              ),
+            ),
+          );
+          return;
+        }
+
+        if (residentData['status'] != 'active') {
+          await FirebaseAuth.instance.signOut();
+          _showAuthDialog(
+            title: 'Access Denied',
+            message: 'Your account is not active yet. Contact admin.',
+            isError: true,
+          );
+          return;
+        }
+
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (_) => const ResidentDashboard()),
         );
       }
     } on FirebaseAuthException catch (e) {
-      _showAuthDialog(
-        title: 'Login Failed',
-        message: e.message ?? 'Authentication error',
-        isError: true,
-      );
+      final code = e.code.toLowerCase();
+      String message = e.message ?? 'Authentication error';
+
+      if (code == 'user-not-found' || code == 'invalid-credential') {
+        message =
+            'No account found for this email. If you were invited, please sign up first using the same email.';
+      } else if (code == 'wrong-password') {
+        message = 'Incorrect password. Please try again.';
+      } else if (code == 'user-disabled') {
+        message = 'This account is disabled. Contact the admin.';
+      }
+
+      _showAuthDialog(title: 'Login Failed', message: message, isError: true);
     } catch (e) {
       _showAuthDialog(
         title: 'Login Failed',
@@ -803,8 +724,7 @@ class _LoginScreenState extends State<LoginScreen> {
           children: [
             Checkbox(
               value: rememberMe,
-              onChanged: (value) =>
-                  setState(() => rememberMe = value ?? true),
+              onChanged: (value) => setState(() => rememberMe = value ?? true),
             ),
             Text('Remember me', style: AppTextStyles.bodySmall),
           ],
@@ -877,8 +797,8 @@ class _LoginScreenState extends State<LoginScreen> {
       width: 18,
       height: 18,
       child: ShaderMask(
-        shaderCallback: (rect) => const SweepGradient(colors: colors)
-            .createShader(rect),
+        shaderCallback: (rect) =>
+            const SweepGradient(colors: colors).createShader(rect),
         child: const Text(
           'G',
           textAlign: TextAlign.center,

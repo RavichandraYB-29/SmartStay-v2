@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
+
+import '../firebase_options.dart';
 
 import 'login_screen.dart';
 
@@ -139,16 +142,71 @@ class _AddResidentScreenState extends State<AddResidentScreen> {
     setState(() => isSaving = true);
 
     try {
-      // Store email in lowercase for consistent matching during signup
+      final email = emailController.text.trim().toLowerCase();
+      final tempPassword =
+          'Tmp@${DateTime.now().millisecondsSinceEpoch % 1000000}';
+
+      String? authUid;
+      FirebaseApp? secondaryApp;
+      try {
+        // Create auth user in a secondary app so admin stays signed in
+        secondaryApp = await Firebase.initializeApp(
+          name: 'invite-${DateTime.now().microsecondsSinceEpoch}',
+          options: DefaultFirebaseOptions.currentPlatform,
+        );
+        final secondaryAuth = FirebaseAuth.instanceFor(app: secondaryApp);
+        final cred = await secondaryAuth.createUserWithEmailAndPassword(
+          email: email,
+          password: tempPassword,
+        );
+        authUid = cred.user?.uid;
+        await cred.user?.sendEmailVerification();
+        await secondaryAuth.sendPasswordResetEmail(email: email);
+        await secondaryAuth.signOut();
+      } on FirebaseAuthException catch (e) {
+        debugPrint('INVITE_AUTH_ERROR: ${e.code} ${e.message}');
+        if (e.code == 'email-already-in-use') {
+          _showDialog(
+            'Account Exists',
+            'This email is already registered. Ask the resident to reset password from the login screen.',
+            isError: true,
+          );
+          return;
+        }
+        rethrow;
+      } finally {
+        if (secondaryApp != null) {
+          await secondaryApp.delete();
+        }
+      }
+
+      if (authUid == null) {
+        _showDialog(
+          'Invitation Failed',
+          'Unable to create authentication record for this resident.',
+          isError: true,
+        );
+        return;
+      }
+
+      // Store resident document linked to auth uid
       await FirebaseFirestore.instance.collection('residents').add({
         'name': fullNameController.text.trim(),
         'fullName': fullNameController.text.trim(),
-        'email': emailController.text.trim().toLowerCase(),
+        'email': email,
         'phone': phoneController.text.trim(),
+        'role': 'resident',
+        'authUid': authUid,
+        'isEmailVerified': false,
         'status': 'invited',
+        'hostelId': null,
+        'floorId': null,
+        'roomId': null,
+        'bedId': null,
         'isAllocated': false,
-        'uid': null,
+        'uid': null, // backward compatibility
         'adminId': widget.adminId,
+        'createdByAdminId': widget.adminId,
         'createdAt': FieldValue.serverTimestamp(),
       });
 
@@ -158,7 +216,7 @@ class _AddResidentScreenState extends State<AddResidentScreen> {
         builder: (_) => AlertDialog(
           title: const Text('Invitation Sent'),
           content: const Text(
-            'Resident has been invited. They can sign up using this email.',
+            'Verification email sent. The resident must verify and set a password before first login.',
           ),
           actions: [
             TextButton(
@@ -178,11 +236,7 @@ class _AddResidentScreenState extends State<AddResidentScreen> {
       );
     } catch (e) {
       debugPrint('INVITE_RESIDENT_ERROR: $e');
-      _showDialog(
-        'Invitation Failed',
-        e.toString(),
-        isError: true,
-      );
+      _showDialog('Invitation Failed', e.toString(), isError: true);
     } finally {
       if (mounted) setState(() => isSaving = false);
     }
@@ -224,7 +278,11 @@ class _AddResidentScreenState extends State<AddResidentScreen> {
         color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(18),
         boxShadow: const [
-          BoxShadow(color: Color(0x11000000), blurRadius: 18, offset: Offset(0, 8)),
+          BoxShadow(
+            color: Color(0x11000000),
+            blurRadius: 18,
+            offset: Offset(0, 8),
+          ),
         ],
       ),
       child: Column(
@@ -233,7 +291,9 @@ class _AddResidentScreenState extends State<AddResidentScreen> {
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
               gradient: LinearGradient(colors: headerGradient),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(18),
+              ),
             ),
             child: Row(
               children: [
@@ -241,9 +301,9 @@ class _AddResidentScreenState extends State<AddResidentScreen> {
                 const SizedBox(width: 8),
                 Text(
                   title,
-                  style: Theme.of(context).textTheme.bodyMedium!.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium!.copyWith(fontWeight: FontWeight.w600),
                 ),
               ],
             ),
@@ -367,7 +427,10 @@ class _AddResidentScreenState extends State<AddResidentScreen> {
                             _fieldLabel('Email Address *', icon: Icons.mail),
                             TextFormField(
                               controller: emailController,
-                              decoration: _input(context, 'resident@example.com'),
+                              decoration: _input(
+                                context,
+                                'resident@example.com',
+                              ),
                               validator: (v) {
                                 if (v == null || v.trim().isEmpty) {
                                   return 'Required';
@@ -420,7 +483,9 @@ class _AddResidentScreenState extends State<AddResidentScreen> {
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(14),
                                 ),
-                                side: const BorderSide(color: Color(0xFFD1D5DB)),
+                                side: const BorderSide(
+                                  color: Color(0xFFD1D5DB),
+                                ),
                               ),
                             ),
                           ),
@@ -434,13 +499,16 @@ class _AddResidentScreenState extends State<AddResidentScreen> {
                                       height: 18,
                                       child: CircularProgressIndicator(
                                         strokeWidth: 2,
-                                        valueColor: AlwaysStoppedAnimation<Color>(
-                                          Colors.white,
-                                        ),
+                                        valueColor:
+                                            AlwaysStoppedAnimation<Color>(
+                                              Colors.white,
+                                            ),
                                       ),
                                     )
                                   : const Icon(Icons.send),
-                              label: Text(isSaving ? 'Sending...' : 'Send Invite'),
+                              label: Text(
+                                isSaving ? 'Sending...' : 'Send Invite',
+                              ),
                               style: ElevatedButton.styleFrom(
                                 minimumSize: const Size.fromHeight(50),
                                 padding: const EdgeInsets.symmetric(
@@ -448,7 +516,9 @@ class _AddResidentScreenState extends State<AddResidentScreen> {
                                   vertical: 14,
                                 ),
                                 backgroundColor: const Color(0xFF4F46E5),
-                                disabledBackgroundColor: const Color(0xFF9CA3AF),
+                                disabledBackgroundColor: const Color(
+                                  0xFF9CA3AF,
+                                ),
                                 foregroundColor: Colors.white,
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(14),

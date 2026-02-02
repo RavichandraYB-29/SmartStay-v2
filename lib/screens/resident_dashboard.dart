@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 
 import 'login_screen.dart';
+import 'resident_notices_screen.dart';
 import '../main.dart';
 import '../theme/app_text_styles.dart';
 
@@ -104,7 +105,7 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
       body: StreamBuilder<DocumentSnapshot>(
         stream: FirebaseFirestore.instance
             .collection('residents')
-            .where('uid', isEqualTo: user.uid)
+            .where('authUid', isEqualTo: user.uid)
             .limit(1)
             .snapshots()
             .map((snap) => snap.docs.isNotEmpty ? snap.docs.first : null)
@@ -178,7 +179,10 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
                             const SizedBox(height: 24),
                             _PaymentSection(residentId: _residentId!),
                             const SizedBox(height: 24),
-                            _QuickActions(),
+                            _QuickActions(
+                              residentId: _residentId!,
+                              hostelId: hostelId?.toString(),
+                            ),
                             const SizedBox(height: 24),
                             _BottomGrid(residentId: _residentId!),
                           ] else
@@ -636,11 +640,15 @@ class _RoomDetailsCard extends StatelessWidget {
                       .snapshots(),
                   builder: (context, roommatesSnap) {
                     final roommates = roommatesSnap.data?.docs ?? [];
+                    final selfAuthUid =
+                        residentData['authUid'] ?? residentData['uid'];
                     final otherRoommates = roommates
                         .where(
                           (r) =>
+                              (r.data() as Map<String, dynamic>)['authUid'] !=
+                                  selfAuthUid &&
                               (r.data() as Map<String, dynamic>)['uid'] !=
-                              residentData['uid'],
+                                  selfAuthUid,
                         )
                         .toList();
 
@@ -1149,31 +1157,25 @@ class _PaymentInfoItem extends StatelessWidget {
 ========================================================= */
 
 class _QuickActions extends StatelessWidget {
+  final String residentId;
+  final String? hostelId;
+
+  const _QuickActions({required this.residentId, required this.hostelId});
+
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
-          children: [
-            Container(
-              height: 4,
-              width: 4,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF14B8A6), Color(0xFF06B6D4)],
-                ),
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(width: 12),
-            const Text(
+          children: const [
+            Text(
               'Quick Actions',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
             ),
           ],
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         Row(
           children: [
             Expanded(
@@ -1184,9 +1186,12 @@ class _QuickActions extends StatelessWidget {
                 icon: const Icon(Icons.notifications_outlined),
                 label: const Text('Raise Complaint'),
                 style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
                   backgroundColor: Colors.orange,
                   foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
               ),
             ),
@@ -1194,14 +1199,25 @@ class _QuickActions extends StatelessWidget {
             Expanded(
               child: ElevatedButton.icon(
                 onPressed: () {
-                  // TODO: Navigate to view notices
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ResidentNoticesScreen(
+                        residentId: residentId,
+                        hostelId: hostelId,
+                      ),
+                    ),
+                  );
                 },
                 icon: const Icon(Icons.description_outlined),
                 label: const Text('View Notices'),
                 style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
                   backgroundColor: const Color(0xFF6C63FF),
                   foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
               ),
             ),
@@ -1228,7 +1244,7 @@ class _BottomGrid extends StatelessWidget {
       children: [
         Expanded(child: _ComplaintsCard(residentId: residentId)),
         const SizedBox(width: 16),
-        Expanded(child: _NoticesCard(residentId: residentId)),
+        Expanded(child: _NoticesPlaceholderCard()),
       ],
     );
   }
@@ -1398,11 +1414,7 @@ class _ComplaintsCard extends StatelessWidget {
   }
 }
 
-class _NoticesCard extends StatelessWidget {
-  final String residentId;
-
-  const _NoticesCard({required this.residentId});
-
+class _NoticesPlaceholderCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
@@ -1415,135 +1427,15 @@ class _NoticesCard extends StatelessWidget {
         padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF6C63FF).withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Icon(
-                        Icons.description_outlined,
-                        color: Color(0xFF6C63FF),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    const Text(
-                      'Recent Notices',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-                IconButton(
-                  icon: const Icon(Icons.visibility_outlined),
-                  onPressed: () {
-                    // TODO: View all notices
-                  },
-                ),
-              ],
+          children: const [
+            Text(
+              'Notices',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
             ),
-            const SizedBox(height: 16),
-            StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('notices')
-                  .orderBy('createdAt', descending: true)
-                  .limit(3)
-                  .snapshots(),
-              builder: (context, snap) {
-                if (!snap.hasData || snap.data!.docs.isEmpty) {
-                  return const Padding(
-                    padding: EdgeInsets.all(20),
-                    child: Center(child: Text('No notices')),
-                  );
-                }
-
-                return Column(
-                  children: snap.data!.docs.map((doc) {
-                    final data = doc.data() as Map<String, dynamic>;
-                    final title = data['title'] ?? 'Untitled';
-                    final message = data['message'] ?? '';
-                    final createdAt = data['createdAt'] as Timestamp?;
-                    final important = data['important'] == true;
-                    final category = data['category'] ?? 'announcement';
-
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).cardColor,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: Theme.of(context).dividerColor,
-                        ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  title,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                              if (important)
-                                Chip(
-                                  label: const Text('Important'),
-                                  backgroundColor: Colors.red.withOpacity(0.2),
-                                ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            message,
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: Theme.of(
-                                context,
-                              ).textTheme.bodySmall?.color,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                createdAt != null
-                                    ? DateFormat(
-                                        'MMM dd, yyyy',
-                                      ).format(createdAt.toDate())
-                                    : '-',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Theme.of(
-                                    context,
-                                  ).textTheme.bodySmall?.color,
-                                ),
-                              ),
-                              Chip(
-                                label: Text(category),
-                                backgroundColor: Colors.grey.withOpacity(0.2),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    );
-                  }).toList(),
-                );
-              },
+            SizedBox(height: 8),
+            Text(
+              'Use View Notices to see admin announcements.',
+              style: TextStyle(fontSize: 13, color: Colors.black54),
             ),
           ],
         ),

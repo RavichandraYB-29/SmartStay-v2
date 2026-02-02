@@ -194,16 +194,19 @@ service cloud.firestore {
       }
     }
 
-    /* ───────── RESIDENTS (INVITE + SIGNUP LOGIC PRESERVED) ───────── */
+    /* ───────── RESIDENTS (ADMIN-CREATED AUTH + VERIFY FLOW) ───────── */
 
     match /residents/{residentId} {
 
-      // Admin creates invite
+      // Admin creates resident + auth link
       allow create: if isAdmin()
         && request.resource.data.adminId == request.auth.uid
+        && request.resource.data.role == 'resident'
         && request.resource.data.status == 'invited'
+        && request.resource.data.isEmailVerified == false
         && request.resource.data.isAllocated == false
-        && request.resource.data.uid == null;
+        && request.resource.data.uid == null
+        && request.resource.data.authUid != null;
 
       // Admin / owner access
       allow read, update, delete: if isAdminOwner(resource.data)
@@ -213,25 +216,19 @@ service cloud.firestore {
           && isHostelAdmin(resource.data.hostelId)
         );
 
-      // Resident reads own record
+      // Resident reads own record (authUid)
       allow read: if isSignedIn()
-        && resource.data.uid == request.auth.uid;
+        && resource.data.authUid == request.auth.uid;
 
-      // Invite lookup during signup
-      allow read: if isSignedIn()
-        && resource.data.status == 'invited'
-        && resource.data.email == request.auth.token.email;
-
-      // Link invite → registered resident
+      // Resident activates after verification
       allow update: if isSignedIn()
-        && resource.data.uid == null
-        && resource.data.status == 'invited'
-        && request.resource.data.uid == request.auth.uid
-        && request.resource.data.status == 'registered'
-        && request.resource.data.isAllocated == false
+        && resource.data.authUid == request.auth.uid
+        && request.resource.data.authUid == request.auth.uid
+        && request.resource.data.status == 'active'
+        && request.resource.data.isEmailVerified == true
         && request.resource.data.adminId == resource.data.adminId
         && request.resource.data.diff(resource.data).changedKeys()
-          .hasOnly(['uid', 'status', 'name', 'fullName', 'phone']);
+          .hasOnly(['status', 'isEmailVerified', 'authUid']);
     }
 
     /* ───────── COMPLAINTS ───────── */
@@ -250,6 +247,41 @@ service cloud.firestore {
       allow read: if isAdminOwner(resource.data)
         || isOwner(resource.data)
         || isSelf(resource.data);
+    }
+
+    /* ───────── NOTICES ───────── */
+
+    match /notices/{noticeId} {
+      allow create: if isAdmin()
+        && request.resource.data.createdByAdminId == request.auth.uid
+        && request.resource.data.title is string
+        && request.resource.data.description is string
+        && request.resource.data.noticeType is string
+        && request.resource.data.audienceType in ['all', 'hostel', 'resident'];
+
+      allow update, delete: if isAdmin()
+        && resource.data.createdByAdminId == request.auth.uid;
+
+      allow read: if isAdmin()
+        || (
+          hasResidentRecord()
+          && (
+            resource.data.audienceType == 'all'
+            || (
+              resource.data.audienceType == 'hostel'
+              && (
+                (residentDocForUser().data.allocationDetails != null
+                  ? residentDocForUser().data.allocationDetails.hostelId
+                  : residentDocForUser().data.hostelId
+                ) == resource.data.hostelId
+              )
+            )
+            || (
+              resource.data.audienceType == 'resident'
+              && resource.data.residentId == userDoc().data.residentId
+            )
+          )
+        );
     }
   }
 }

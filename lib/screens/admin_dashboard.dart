@@ -102,8 +102,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
           children: [
             _Header(date: date),
             const SizedBox(height: 22),
-            const _SearchBar(),
-            const SizedBox(height: 28),
+            const SizedBox(height: 6),
             _StatsRow(adminId: adminId),
             const SizedBox(height: 32),
             _QuickActions(context, adminId),
@@ -128,7 +127,6 @@ class _Header extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final app = context.findAncestorWidgetOfExactType<SmartStayApp>();
-    final cs = Theme.of(context).colorScheme;
 
     return Row(
       children: [
@@ -183,36 +181,7 @@ class _Header extends StatelessWidget {
             );
           },
         ),
-        const SizedBox(width: 4),
-        CircleAvatar(
-          backgroundColor: cs.primary.withOpacity(0.15),
-          child: Icon(Icons.person, color: cs.primary),
-        ),
       ],
-    );
-  }
-}
-
-/* =========================================================
-   SEARCH BAR
-========================================================= */
-
-class _SearchBar extends StatelessWidget {
-  const _SearchBar();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 52,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: _card(context),
-      child: const TextField(
-        decoration: InputDecoration(
-          icon: Icon(Icons.search),
-          hintText: 'Search residents, rooms, payments...',
-          border: InputBorder.none,
-        ),
-      ),
     );
   }
 }
@@ -236,9 +205,9 @@ class _StatsRow extends StatelessWidget {
         .collectionGroup('rooms')
         .where('adminId', isEqualTo: adminId)
         .snapshots();
-
-    final bedsStream = FirebaseFirestore.instance
-        .collectionGroup('beds')
+    final roomsFallbackStream = FirebaseFirestore.instance
+        .collectionGroup('rooms')
+        .where('createdByAdminId', isEqualTo: adminId)
         .snapshots();
 
     final complaintsStream = FirebaseFirestore.instance
@@ -254,146 +223,178 @@ class _StatsRow extends StatelessWidget {
     return StreamBuilder<QuerySnapshot>(
       stream: roomsStream,
       builder: (context, roomsSnap) {
+        if (roomsSnap.hasError) {
+          return _buildStatsGrid(
+            context: context,
+            roomsDocs: const [],
+            residentsStream: residentsStream,
+            complaintsStream: complaintsStream,
+            paymentsStream: paymentsStream,
+          );
+        }
+        if (!roomsSnap.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
         final roomsDocs = roomsSnap.data?.docs ?? [];
-        final totalBeds = _totalBedsFromRooms(roomsDocs);
-
-        return StreamBuilder<QuerySnapshot>(
-          stream: bedsStream,
-          builder: (context, bedsSnap) {
-            // Count occupied beds by checking beds subcollection
-            // Filter beds that belong to rooms owned by this admin
-            final bedsDocs = bedsSnap.data?.docs ?? [];
-            int occupiedBeds = 0;
-
-            // Get room IDs for this admin
-            final adminRoomIds = roomsDocs.map((r) => r.id).toSet();
-
-            // Count occupied beds in admin's rooms
-            for (final bedDoc in bedsDocs) {
-              final bedData = bedDoc.data() as Map<String, dynamic>;
-              // Extract roomId from bed document path
-              // Path format: hostels/{hostelId}/floors/{floorId}/rooms/{roomId}/beds/{bedId}
-              final pathParts = bedDoc.reference.path.split('/');
-              final roomIndex = pathParts.indexOf('rooms');
-              if (roomIndex != -1 && roomIndex + 1 < pathParts.length) {
-                final roomId = pathParts[roomIndex + 1];
-                // Check if bed is in admin's room and is occupied
-                if (adminRoomIds.contains(roomId) &&
-                    bedData['isOccupied'] == true) {
-                  occupiedBeds++;
-                }
+        if (roomsDocs.isEmpty) {
+          return StreamBuilder<QuerySnapshot>(
+            stream: roomsFallbackStream,
+            builder: (context, fallbackSnap) {
+              if (fallbackSnap.hasError) {
+                return _buildStatsGrid(
+                  context: context,
+                  roomsDocs: const [],
+                  residentsStream: residentsStream,
+                  complaintsStream: complaintsStream,
+                  paymentsStream: paymentsStream,
+                );
               }
-            }
-
-            return StreamBuilder<QuerySnapshot>(
-              stream: residentsStream,
-              builder: (context, residentsSnap) {
-                final residentsDocs = residentsSnap.data?.docs ?? [];
-                final totalResidents = residentsDocs.length;
-                final allocatedResidents = residentsDocs
-                    .where((r) => r['isAllocated'] == true)
-                    .length;
-
-                // Use allocated residents count as fallback if bed count is 0
-                final actualOccupiedBeds = occupiedBeds > 0
-                    ? occupiedBeds
-                    : allocatedResidents;
-                final availableBeds = (totalBeds - actualOccupiedBeds).clamp(
-                  0,
-                  totalBeds,
-                );
-                final occupancyPercentage = totalBeds > 0
-                    ? (actualOccupiedBeds / totalBeds * 100).round()
-                    : 0;
-
-                return StreamBuilder<QuerySnapshot>(
-                  stream: complaintsStream,
-                  builder: (context, complaintsSnap) {
-                    final complaintsDocs = complaintsSnap.data?.docs ?? [];
-                    final openComplaints = complaintsDocs.where((c) {
-                      final status =
-                          c['status']?.toString().toLowerCase() ?? '';
-                      return status != 'resolved' && status != 'closed';
-                    }).length;
-
-                    return StreamBuilder<QuerySnapshot>(
-                      stream: paymentsStream,
-                      builder: (context, paymentsSnap) {
-                        final pendingFromPayments = _sumPendingFeesFromPayments(
-                          paymentsSnap.data?.docs ?? [],
-                        );
-                        final pendingFromResidents =
-                            _sumPendingFeesFromResidents(residentsDocs);
-
-                        final pendingTotal = pendingFromPayments > 0
-                            ? pendingFromPayments
-                            : pendingFromResidents;
-
-                        return GridView.count(
-                          crossAxisCount: 4,
-                          shrinkWrap: true,
-                          physics: const NeverScrollableScrollPhysics(),
-                          crossAxisSpacing: 16,
-                          mainAxisSpacing: 16,
-                          childAspectRatio: 1.2,
-                          children: [
-                            _StatCard(
-                              icon: Icons.people,
-                              title: 'Total Residents',
-                              value: totalResidents.toString(),
-                              change: '+$allocatedResidents allocated',
-                              changeType: 'positive',
-                            ),
-                            _StatCard(
-                              icon: Icons.bed,
-                              title: 'Available Beds',
-                              value: availableBeds.toString(),
-                              showProgress: true,
-                              progressValue: totalBeds == 0
-                                  ? 0
-                                  : actualOccupiedBeds / totalBeds,
-                              change: 'Out of $totalBeds total',
-                              occupancy: occupancyPercentage,
-                            ),
-                            _StatCard(
-                              icon: Icons.currency_rupee,
-                              title: 'Pending Fees',
-                              value: '₹$pendingTotal',
-                              change:
-                                  '${paymentsSnap.data?.docs.where((p) {
-                                        final status = p['status']?.toString().toLowerCase() ?? '';
-                                        final isPaid = p['isPaid'] == true;
-                                        return status == 'pending' || (!isPaid && status != 'paid');
-                                      }).length ?? 0} residents',
-                              changeType: 'warning',
-                            ),
-                            _StatCard(
-                              icon: Icons.notifications_active,
-                              title: 'Open Complaints',
-                              value: openComplaints.toString(),
-                              change:
-                                  '${complaintsDocs.where((c) {
-                                    final createdAt = c['createdAt'] as Timestamp?;
-                                    if (createdAt == null) return false;
-                                    final now = DateTime.now();
-                                    final created = createdAt.toDate();
-                                    return now.difference(created).inDays == 0;
-                                  }).length} new today',
-                              changeType: 'warning',
-                            ),
-                          ],
-                        );
-                      },
-                    );
-                  },
-                );
-              },
-            );
-          },
+              if (!fallbackSnap.hasData) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              final fallbackRooms = fallbackSnap.data?.docs ?? [];
+              return _buildStatsGrid(
+                context: context,
+                roomsDocs: fallbackRooms,
+                residentsStream: residentsStream,
+                complaintsStream: complaintsStream,
+                paymentsStream: paymentsStream,
+              );
+            },
+          );
+        }
+        return _buildStatsGrid(
+          context: context,
+          roomsDocs: roomsDocs,
+          residentsStream: residentsStream,
+          complaintsStream: complaintsStream,
+          paymentsStream: paymentsStream,
         );
       },
     );
   }
+}
+
+Widget _buildStatsGrid({
+  required BuildContext context,
+  required List<QueryDocumentSnapshot> roomsDocs,
+  required Stream<QuerySnapshot> residentsStream,
+  required Stream<QuerySnapshot> complaintsStream,
+  required Stream<QuerySnapshot> paymentsStream,
+}) {
+  final totalBeds = _totalBedsFromRooms(roomsDocs);
+  final occupiedFromRooms = _occupiedBedsFromRooms(roomsDocs);
+
+  return StreamBuilder<QuerySnapshot>(
+    stream: residentsStream,
+    builder: (context, residentsSnap) {
+      final residentsDocs = residentsSnap.data?.docs ?? [];
+      final totalResidents = residentsDocs.length;
+      final allocatedResidents = residentsDocs.where((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        return data['isAllocated'] == true;
+      }).length;
+
+      final actualOccupiedBeds =
+          occupiedFromRooms > 0 ? occupiedFromRooms : allocatedResidents;
+      final availableBeds = (totalBeds - actualOccupiedBeds).clamp(
+        0,
+        totalBeds,
+      );
+      final occupancyPercentage =
+          totalBeds > 0 ? (actualOccupiedBeds / totalBeds * 100).round() : 0;
+
+      return StreamBuilder<QuerySnapshot>(
+        stream: complaintsStream,
+        builder: (context, complaintsSnap) {
+          final complaintsDocs = complaintsSnap.data?.docs ?? [];
+          final openComplaints = complaintsDocs.where((doc) {
+            final data = doc.data() as Map<String, dynamic>;
+            final status = data['status']?.toString().toLowerCase() ?? '';
+            return status != 'resolved' && status != 'closed';
+          }).length;
+
+          return StreamBuilder<QuerySnapshot>(
+            stream: paymentsStream,
+            builder: (context, paymentsSnap) {
+              final paymentDocs = paymentsSnap.data?.docs ?? [];
+              final pendingFromPayments = _sumPendingFeesFromPayments(
+                paymentDocs,
+              );
+              final pendingFromResidents =
+                  _sumPendingFeesFromResidents(residentsDocs);
+
+              final pendingTotal = pendingFromPayments > 0
+                  ? pendingFromPayments
+                  : pendingFromResidents;
+
+              final cards = [
+                  _StatCard(
+                    icon: Icons.people,
+                    title: 'Total Residents',
+                    value: totalResidents.toString(),
+                    change: '+$allocatedResidents allocated',
+                    changeType: 'positive',
+                  ),
+                  _StatCard(
+                    icon: Icons.bed,
+                    title: 'Available Beds',
+                    value: availableBeds.toString(),
+                    showProgress: true,
+                    progressValue:
+                        totalBeds == 0 ? 0 : actualOccupiedBeds / totalBeds,
+                    change: 'Out of $totalBeds total',
+                    occupancy: occupancyPercentage,
+                  ),
+                  _StatCard(
+                    icon: Icons.currency_rupee,
+                    title: 'Pending Fees',
+                    value: '₹$pendingTotal',
+                    change: '${_countPendingResidents(paymentDocs)} residents',
+                    changeType: 'warning',
+                  ),
+                  _StatCard(
+                    icon: Icons.notifications_active,
+                    title: 'Open Complaints',
+                    value: openComplaints.toString(),
+                    change:
+                        '${complaintsDocs.where((c) {
+                        final data = c.data() as Map<String, dynamic>;
+                        final createdAt = data['createdAt'] as Timestamp?;
+                          if (createdAt == null) return false;
+                          final now = DateTime.now();
+                          final created = createdAt.toDate();
+                          return now.difference(created).inDays == 0;
+                        }).length} new today',
+                    changeType: 'warning',
+                  ),
+              ];
+
+              return LayoutBuilder(
+                builder: (context, constraints) {
+                  final width = constraints.maxWidth;
+                  final crossAxisCount = width >= 1100
+                      ? 4
+                      : width >= 760
+                          ? 2
+                          : 1;
+                  return GridView.count(
+                    crossAxisCount: crossAxisCount,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    crossAxisSpacing: 16,
+                    mainAxisSpacing: 16,
+                    childAspectRatio: 2.7,
+                    children: cards,
+                  );
+                },
+              );
+            },
+          );
+        },
+      );
+    },
+  );
 }
 
 class _StatCard extends StatelessWidget {
@@ -437,7 +438,7 @@ class _StatCard extends StatelessWidget {
     }
 
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(16),
@@ -450,39 +451,47 @@ class _StatCard extends StatelessWidget {
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isCompact = constraints.maxHeight < 120;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Theme.of(context).textTheme.bodySmall?.color,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      value,
-                      style: const TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    if (change != null) ...[
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Theme.of(context).textTheme.bodySmall?.color,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          value,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        if (!isCompact && change != null) ...[
+                          const SizedBox(height: 2),
                           Text(
                             change!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                              fontSize: 11,
+                              fontSize: 10,
                               color: changeType == 'positive'
                                   ? const Color(0xFF14B8A6)
                                   : changeType == 'warning'
@@ -493,62 +502,58 @@ class _StatCard extends StatelessWidget {
                             ),
                           ),
                         ],
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: iconBgColor,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(icon, color: iconColor, size: 24),
-              ),
-            ],
-          ),
-          if (showProgress && progressValue != null) ...[
-            const SizedBox(height: 16),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Occupancy Rate',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Theme.of(context).textTheme.bodySmall?.color,
-                      ),
+                      ],
                     ),
-                    if (occupancy != null)
+                  ),
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: iconBgColor,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(icon, color: iconColor, size: 18),
+                  ),
+                ],
+              ),
+              if (showProgress && progressValue != null) ...[
+                SizedBox(height: isCompact ? 4 : 6),
+                if (!isCompact)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
                       Text(
-                        '$occupancy%',
+                        'Occupancy Rate',
                         style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: Theme.of(context).textTheme.bodyMedium?.color,
+                          fontSize: 10,
+                          color: Theme.of(context).textTheme.bodySmall?.color,
                         ),
                       ),
-                  ],
-                ),
-                const SizedBox(height: 6),
+                      if (occupancy != null)
+                        Text(
+                          '$occupancy%',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            color: Theme.of(context).textTheme.bodyMedium?.color,
+                          ),
+                        ),
+                    ],
+                  ),
+                if (!isCompact) const SizedBox(height: 3),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(4),
                   child: LinearProgressIndicator(
                     value: progressValue!,
-                    minHeight: 6,
+                    minHeight: isCompact ? 3 : 4,
                     backgroundColor: Theme.of(context).dividerColor,
                     valueColor: AlwaysStoppedAnimation(iconColor),
                   ),
                 ),
               ],
-            ),
-          ],
-        ],
+            ],
+          );
+        },
       ),
     );
   }
@@ -607,15 +612,756 @@ Widget _QuickActions(BuildContext context, String adminId) {
               );
             },
           ),
-          const _ActionButton(
+          _ActionButton(
             label: 'Send Notice',
             icon: Icons.notifications,
-            gradient: [Color(0xFF9333EA), Color(0xFFEC4899)],
+            gradient: const [Color(0xFF9333EA), Color(0xFFEC4899)],
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SendNoticeScreen()),
+              );
+            },
           ),
         ],
       ),
     ],
   );
+}
+
+/* =========================================================
+   SEND NOTICE (UI ONLY)
+========================================================= */
+
+class SendNoticeScreen extends StatefulWidget {
+  final VoidCallback? onBack;
+
+  const SendNoticeScreen({super.key, this.onBack});
+
+  @override
+  State<SendNoticeScreen> createState() => _SendNoticeScreenState();
+}
+
+class _SendNoticeScreenState extends State<SendNoticeScreen> {
+  final _titleController = TextEditingController();
+  final _messageController = TextEditingController();
+
+  String _noticeType = '';
+  String _audience = '';
+  String _selectedHostelId = '';
+  String _selectedResidentId = '';
+  String _selectedResidentLabel = '';
+
+  final _noticeTypes = const [
+    {
+      'value': 'general',
+      'label': 'General',
+      'description': 'General announcements and updates',
+      'color': Color(0xFF4F46E5),
+    },
+    {
+      'value': 'maintenance',
+      'label': 'Maintenance',
+      'description': 'Facility maintenance schedules',
+      'color': Color(0xFF7C3AED),
+    },
+    {
+      'value': 'payment',
+      'label': 'Payment',
+      'description': 'Fee reminders and payment notices',
+      'color': Color(0xFFEA580C),
+    },
+    {
+      'value': 'warning',
+      'label': 'Warning',
+      'description': 'Important warnings and alerts',
+      'color': Color(0xFFDC2626),
+    },
+  ];
+
+  bool get _isFormValid {
+    if (_titleController.text.trim().isEmpty) return false;
+    if (_messageController.text.trim().isEmpty) return false;
+    if (_noticeType.isEmpty) return false;
+    if (_audience.isEmpty) return false;
+    if (_audience == 'hostel' && _selectedHostelId.isEmpty) return false;
+    if (_audience == 'resident' && _selectedResidentId.isEmpty) {
+      return false;
+    }
+    return true;
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _messageController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleSubmit() async {
+    if (!_isFormValid) return;
+    final adminUid = FirebaseAuth.instance.currentUser?.uid;
+    if (adminUid == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to publish notice')),
+      );
+      return;
+    }
+
+    try {
+      final docRef = FirebaseFirestore.instance.collection('notices').doc();
+      final payload = <String, dynamic>{
+        'noticeId': docRef.id,
+        'title': _titleController.text.trim(),
+        'description': _messageController.text.trim(),
+        'noticeType': _noticeType,
+        'audienceType': _audience,
+        'createdByAdminId': adminUid,
+        'createdAt': FieldValue.serverTimestamp(),
+      };
+
+      if (_audience == 'hostel') {
+        payload['hostelId'] = _selectedHostelId;
+      } else if (_audience == 'resident') {
+        payload['residentId'] = _selectedResidentId;
+      }
+
+      await docRef.set(payload);
+
+      debugPrint('Notice published: ${docRef.id}');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Notice published successfully')),
+      );
+    } catch (_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to publish notice')),
+      );
+    }
+  }
+
+  void _handleCancel() {
+    if (widget.onBack != null) {
+      widget.onBack!();
+      return;
+    }
+    Navigator.maybePop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Map<String, Object?>? selectedType;
+    for (final item in _noticeTypes) {
+      if (item['value'] == _noticeType) {
+        selectedType = item;
+        break;
+      }
+    }
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF7F7FB),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surface,
+                border: Border(
+                  bottom: BorderSide(color: Theme.of(context).dividerColor),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.04),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back),
+                    onPressed: _handleCancel,
+                  ),
+                  Container(
+                    height: 44,
+                    width: 44,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF4F46E5), Color(0xFF7C3AED)],
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF4F46E5).withOpacity(0.25),
+                          blurRadius: 10,
+                          offset: const Offset(0, 6),
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.description_outlined,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Send Notice',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        SizedBox(height: 2),
+                        Text(
+                          'Dashboard → Communication → Send Notice',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.black54,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  children: [
+                    Card(
+                      elevation: 2,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(16),
+                            decoration: const BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [Color(0xFFEFF1FF), Color(0xFFF5EEFF)],
+                              ),
+                              borderRadius: BorderRadius.vertical(
+                                top: Radius.circular(16),
+                              ),
+                            ),
+                            child: const Row(
+                              children: [
+                                Icon(Icons.description, color: Color(0xFF4F46E5)),
+                                SizedBox(width: 8),
+                                Text(
+                                  'Notice Details',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Notice Title *',
+                                  style: TextStyle(fontSize: 12),
+                                ),
+                                const SizedBox(height: 8),
+                                TextField(
+                                  controller: _titleController,
+                                  decoration: const InputDecoration(
+                                    hintText:
+                                        'Enter notice title (e.g., Holiday Announcement)',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  onChanged: (_) => setState(() {}),
+                                ),
+                                const SizedBox(height: 20),
+                                const Text(
+                                  'Notice Description *',
+                                  style: TextStyle(fontSize: 12),
+                                ),
+                                const SizedBox(height: 8),
+                                TextField(
+                                  controller: _messageController,
+                                  maxLines: 6,
+                                  decoration: const InputDecoration(
+                                    hintText: 'Enter your notice message here...',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  onChanged: (_) => setState(() {}),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  '${_messageController.text.length} characters',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.black54,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Card(
+                      elevation: 2,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(16),
+                            decoration: const BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [Color(0xFFF4EDFF), Color(0xFFFFF0F8)],
+                              ),
+                              borderRadius: BorderRadius.vertical(
+                                top: Radius.circular(16),
+                              ),
+                            ),
+                            child: const Row(
+                              children: [
+                                Icon(Icons.local_offer, color: Color(0xFF7C3AED)),
+                                SizedBox(width: 8),
+                                Text(
+                                  'Notice Type',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              children: [
+                                Wrap(
+                                  spacing: 12,
+                                  runSpacing: 12,
+                                  children: _noticeTypes.map((type) {
+                                    final isSelected =
+                                        _noticeType == type['value'];
+                                    final typeColor = type['color'] as Color;
+                                    return InkWell(
+                                      onTap: () {
+                                        setState(() {
+                                          _noticeType = type['value'] as String;
+                                        });
+                                      },
+                                      borderRadius: BorderRadius.circular(14),
+                                      child: Container(
+                                        width: 240,
+                                        padding: const EdgeInsets.all(14),
+                                        decoration: BoxDecoration(
+                                          borderRadius: BorderRadius.circular(14),
+                                          border: Border.all(
+                                            color: isSelected
+                                                ? typeColor
+                                                : Theme.of(context).dividerColor,
+                                            width: 2,
+                                          ),
+                                          color: isSelected
+                                              ? typeColor.withOpacity(0.08)
+                                              : Theme.of(context).cardColor,
+                                          boxShadow: isSelected
+                                              ? [
+                                                  BoxShadow(
+                                                    color: typeColor
+                                                        .withOpacity(0.15),
+                                                    blurRadius: 12,
+                                                    offset: const Offset(0, 6),
+                                                  ),
+                                                ]
+                                              : [],
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Container(
+                                                  height: 10,
+                                                  width: 10,
+                                                  decoration: BoxDecoration(
+                                                    color: typeColor,
+                                                    shape: BoxShape.circle,
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Text(
+                                                  type['label'] as String,
+                                                  style: TextStyle(
+                                                    fontWeight: FontWeight.w600,
+                                                    color: isSelected
+                                                        ? typeColor
+                                                        : Colors.black87,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 8),
+                                            Text(
+                                              type['description'] as String,
+                                              style: const TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.black54,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                  }).toList(),
+                                ),
+                                if (selectedType != null) ...[
+                                  const SizedBox(height: 16),
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      gradient: const LinearGradient(
+                                        colors: [
+                                          Color(0xFFEFF1FF),
+                                          Color(0xFFF5EEFF),
+                                        ],
+                                      ),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: const Color(0xFF4F46E5)
+                                            .withOpacity(0.2),
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const Text(
+                                          'Notice will be marked as:',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.black87,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 10,
+                                            vertical: 4,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: selectedType['color'] as Color,
+                                            borderRadius:
+                                                BorderRadius.circular(12),
+                                          ),
+                                          child: Text(
+                                            selectedType['label'] as String,
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Card(
+                      elevation: 2,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(16),
+                            decoration: const BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [Color(0xFFEAFBF7), Color(0xFFE6F7FF)],
+                              ),
+                              borderRadius: BorderRadius.vertical(
+                                top: Radius.circular(16),
+                              ),
+                            ),
+                            child: const Row(
+                              children: [
+                                Icon(Icons.people, color: Color(0xFF0F766E)),
+                                SizedBox(width: 8),
+                                Text(
+                                  'Audience Selection',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              children: [
+                                RadioListTile<String>(
+                                  value: 'all',
+                                  groupValue: _audience,
+                                  onChanged: (value) {
+                                    setState(() {
+                                      _audience = value ?? '';
+                                      _selectedHostelId = '';
+                                      _selectedResidentId = '';
+                                      _selectedResidentLabel = '';
+                                    });
+                                  },
+                                  title: const Text('All Residents'),
+                                  subtitle:
+                                      const Text('Send to every resident'),
+                                  secondary: const Icon(Icons.groups),
+                                ),
+                                RadioListTile<String>(
+                                  value: 'hostel',
+                                  groupValue: _audience,
+                                  onChanged: (value) {
+                                    setState(() {
+                                      _audience = value ?? '';
+                                      _selectedHostelId = '';
+                                      _selectedResidentId = '';
+                                      _selectedResidentLabel = '';
+                                    });
+                                  },
+                                  title: const Text('Specific Hostel (PG)'),
+                                  subtitle: const Text('Send to one hostel'),
+                                  secondary: const Icon(Icons.apartment),
+                                ),
+                                RadioListTile<String>(
+                                  value: 'resident',
+                                  groupValue: _audience,
+                                  onChanged: (value) {
+                                    setState(() {
+                                      _audience = value ?? '';
+                                      _selectedHostelId = '';
+                                      _selectedResidentId = '';
+                                      _selectedResidentLabel = '';
+                                    });
+                                  },
+                                  title: const Text('Specific Resident'),
+                                  subtitle: const Text('Send to one person'),
+                                  secondary: const Icon(Icons.person),
+                                ),
+                                const SizedBox(height: 12),
+                                if (_audience == 'hostel') ...[
+                                  const Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Text(
+                                      'Select Hostel *',
+                                      style: TextStyle(fontSize: 12),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  StreamBuilder<QuerySnapshot>(
+                                    stream: FirebaseFirestore.instance
+                                        .collection('hostels')
+                                        .where(
+                                          'adminId',
+                                          isEqualTo: FirebaseAuth
+                                              .instance.currentUser?.uid,
+                                        )
+                                        .snapshots(),
+                                    builder: (context, snap) {
+                                      final items = snap.data?.docs ?? [];
+                                      return DropdownButtonFormField<String>(
+                                        value: _selectedHostelId.isEmpty
+                                            ? null
+                                            : _selectedHostelId,
+                                        decoration: const InputDecoration(
+                                          border: OutlineInputBorder(),
+                                          hintText: 'Select hostel',
+                                        ),
+                                        items: items.map((doc) {
+                                          final data =
+                                              doc.data() as Map<String, dynamic>;
+                                          final label = data['name'] ??
+                                              data['hostelName'] ??
+                                              'Hostel';
+                                          return DropdownMenuItem<String>(
+                                            value: doc.id,
+                                            child: Text(label.toString()),
+                                          );
+                                        }).toList(),
+                                        onChanged: (value) {
+                                          setState(() {
+                                            _selectedHostelId = value ?? '';
+                                          });
+                                        },
+                                      );
+                                    },
+                                  ),
+                                ],
+                                if (_audience == 'resident') ...[
+                                  const Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Text(
+                                      'Select Resident *',
+                                      style: TextStyle(fontSize: 12),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  StreamBuilder<QuerySnapshot>(
+                                    stream: FirebaseFirestore.instance
+                                        .collection('residents')
+                                        .where(
+                                          'adminId',
+                                          isEqualTo: FirebaseAuth
+                                              .instance.currentUser?.uid,
+                                        )
+                                        .snapshots(),
+                                    builder: (context, snap) {
+                                      final items = snap.data?.docs ?? [];
+                                      return DropdownButtonFormField<String>(
+                                        value: _selectedResidentId.isEmpty
+                                            ? null
+                                            : _selectedResidentId,
+                                        decoration: const InputDecoration(
+                                          border: OutlineInputBorder(),
+                                          hintText: 'Select resident',
+                                        ),
+                                        items: items.map((doc) {
+                                          final data =
+                                              doc.data() as Map<String, dynamic>;
+                                          final label = data['name'] ??
+                                              data['fullName'] ??
+                                              data['email'] ??
+                                              'Resident';
+                                          return DropdownMenuItem<String>(
+                                            value: doc.id,
+                                            child: Text(label.toString()),
+                                          );
+                                        }).toList(),
+                                        onChanged: (value) {
+                                          final selected = items
+                                              .where((doc) => doc.id == value)
+                                              .toList();
+                                          String label = '';
+                                          if (selected.isNotEmpty) {
+                                            final data = selected.first.data()
+                                                as Map<String, dynamic>;
+                                            label = (data['name'] ??
+                                                    data['fullName'] ??
+                                                    data['email'] ??
+                                                    '')
+                                                .toString();
+                                          }
+                                          setState(() {
+                                            _selectedResidentId = value ?? '';
+                                            _selectedResidentLabel = label;
+                                          });
+                                        },
+                                      );
+                                    },
+                                  ),
+                                ],
+                                if (_audience.isNotEmpty) ...[
+                                  const SizedBox(height: 16),
+                                  Container(
+                                    width: double.infinity,
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      gradient: const LinearGradient(
+                                        colors: [
+                                          Color(0xFFEAFBF7),
+                                          Color(0xFFE6F7FF),
+                                        ],
+                                      ),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: const Color(0xFF0F766E)
+                                            .withOpacity(0.2),
+                                      ),
+                                    ),
+                                    child: Text(
+                                      _audience == 'all'
+                                          ? '✓ All residents across all hostels'
+                                          : _audience == 'hostel'
+                                              ? _selectedHostelId.isEmpty
+                                                  ? 'Please select a hostel'
+                                                  : '✓ Residents in selected hostel'
+                                              : _selectedResidentId.isEmpty
+                                                  ? 'Please select a resident'
+                                                  : '✓ $_selectedResidentLabel',
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: Color(0xFF0F766E),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _handleCancel,
+                            icon: const Icon(Icons.close),
+                            label: const Text('Cancel'),
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: _isFormValid ? _handleSubmit : null,
+                            icon: const Icon(Icons.send),
+                            label: const Text('Publish Notice'),
+                            style: ElevatedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              backgroundColor: const Color(0xFF4F46E5),
+                              foregroundColor: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _ActionButton extends StatelessWidget {
@@ -777,107 +1523,41 @@ class _OccupancyByFloor extends StatelessWidget {
           const SizedBox(height: 18),
           StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance
-                .collectionGroup('floors')
+                .collection('hostels')
                 .where('adminId', isEqualTo: adminId)
                 .snapshots(),
-            builder: (context, floorsSnap) {
-              if (!floorsSnap.hasData) {
+            builder: (context, hostelsSnap) {
+              if (!hostelsSnap.hasData) {
                 return const Center(child: CircularProgressIndicator());
               }
 
-              final floors = floorsSnap.data!.docs;
-              if (floors.isEmpty) {
-                return const Text(
-                  'No floors available',
-                  style: AppTextStyles.bodySmall,
+              final hostels = hostelsSnap.data!.docs;
+              if (hostels.isEmpty) {
+                return StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance
+                      .collection('hostels')
+                      .where('createdByAdminId', isEqualTo: adminId)
+                      .snapshots(),
+                  builder: (context, fallbackSnap) {
+                    if (!fallbackSnap.hasData) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    final fallbackHostels = fallbackSnap.data!.docs;
+                    if (fallbackHostels.isEmpty) {
+                      return const Text(
+                        'No floors available',
+                        style: AppTextStyles.bodySmall,
+                      );
+                    }
+                    return _buildFloorsFromHostels(
+                      context,
+                      fallbackHostels,
+                    );
+                  },
                 );
               }
 
-              return Column(
-                children: floors.map((floor) {
-                  final floorId = floor.id;
-                  final floorName =
-                      (floor['floorName'] ?? '').toString().trim().isEmpty
-                      ? 'Floor ${floor['floorIndex'] ?? ''}'
-                      : floor['floorName'].toString();
-                  final hostelId = floor['hostelId']?.toString();
-
-                  if (hostelId == null || floorId.isEmpty) {
-                    return _emptyFloorRow(context, floorName);
-                  }
-
-                  final roomsStream = FirebaseFirestore.instance
-                      .collection('hostels')
-                      .doc(hostelId)
-                      .collection('floors')
-                      .doc(floorId)
-                      .collection('rooms')
-                      .snapshots();
-
-                  return StreamBuilder<QuerySnapshot>(
-                    stream: roomsStream,
-                    builder: (context, roomsSnap) {
-                      if (!roomsSnap.hasData) {
-                        return _emptyFloorRow(context, floorName);
-                      }
-
-                      int totalBeds = 0;
-                      int occupiedBeds = 0;
-                      for (final room in roomsSnap.data!.docs) {
-                        final data = room.data() as Map<String, dynamic>;
-                        final tb = data['totalBeds'];
-                        final ob = data['occupiedBeds'];
-                        totalBeds += tb is int
-                            ? tb
-                            : (tb is String ? int.tryParse(tb) ?? 0 : 0);
-                        occupiedBeds += ob is int
-                            ? ob
-                            : (ob is String ? int.tryParse(ob) ?? 0 : 0);
-                      }
-
-                      if (totalBeds == 0) {
-                        return _emptyFloorRow(context, floorName);
-                      }
-
-                      final percentage = (occupiedBeds / totalBeds).clamp(
-                        0.0,
-                        1.0,
-                      );
-
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(floorName, style: AppTextStyles.bodySmall),
-                                Text(
-                                  '$occupiedBeds/$totalBeds',
-                                  style: AppTextStyles.bodySmall,
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 6),
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(4),
-                              child: LinearProgressIndicator(
-                                value: percentage,
-                                minHeight: 6,
-                                backgroundColor: Theme.of(context).dividerColor,
-                                valueColor: AlwaysStoppedAnimation(
-                                  Theme.of(context).colorScheme.primary,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  );
-                }).toList(),
-              );
+              return _buildFloorsFromHostels(context, hostels);
             },
           ),
         ],
@@ -1269,13 +1949,65 @@ int _extractPaymentAmount(Map<String, dynamic> data) {
   return 0;
 }
 
+int _countPendingResidents(List<QueryDocumentSnapshot> payments) {
+  int count = 0;
+  for (final doc in payments) {
+    final data = doc.data() as Map<String, dynamic>;
+    final status = data['status']?.toString().toLowerCase() ?? '';
+    final isPaid = data['isPaid'] == true;
+    if (status == 'pending' || (!isPaid && status != 'paid')) {
+      count++;
+    }
+  }
+  return count;
+}
+
 int _totalBedsFromRooms(List<QueryDocumentSnapshot> docs) {
   int total = 0;
   for (final doc in docs) {
     final data = doc.data() as Map<String, dynamic>;
-    final beds = data['totalBeds'];
-    if (beds is int) total += beds;
-    if (beds is String) total += int.tryParse(beds) ?? 0;
+    final candidates = [
+      data['totalBeds'],
+      data['bedCount'],
+      data['beds'],
+    ];
+    for (final beds in candidates) {
+      if (beds is int) {
+        total += beds;
+        break;
+      }
+      if (beds is String) {
+        total += int.tryParse(beds) ?? 0;
+        break;
+      }
+      if (beds is List) {
+        total += beds.length;
+        break;
+      }
+    }
+  }
+  return total;
+}
+
+int _occupiedBedsFromRooms(List<QueryDocumentSnapshot> docs) {
+  int total = 0;
+  for (final doc in docs) {
+    final data = doc.data() as Map<String, dynamic>;
+    final candidates = [
+      data['occupiedBeds'],
+      data['allocatedBeds'],
+      data['filledBeds'],
+    ];
+    for (final value in candidates) {
+      if (value is int) {
+        total += value;
+        break;
+      }
+      if (value is String) {
+        total += int.tryParse(value) ?? 0;
+        break;
+      }
+    }
   }
   return total;
 }
@@ -1301,6 +2033,129 @@ Widget _emptyFloorRow(BuildContext context, String floorName) {
         ),
       ],
     ),
+  );
+}
+
+Widget _buildFloorsFromHostels(
+  BuildContext context,
+  List<QueryDocumentSnapshot> hostels,
+) {
+  return Column(
+    children: hostels.map((hostel) {
+      final hostelId = hostel.id;
+      final floorsStream = FirebaseFirestore.instance
+          .collection('hostels')
+          .doc(hostelId)
+          .collection('floors')
+          .snapshots();
+
+      return StreamBuilder<QuerySnapshot>(
+        stream: floorsStream,
+        builder: (context, floorsSnap) {
+          if (!floorsSnap.hasData) {
+            return const SizedBox.shrink();
+          }
+
+          final floors = floorsSnap.data!.docs;
+          if (floors.isEmpty) {
+            return const SizedBox.shrink();
+          }
+
+          return Column(
+            children: floors.map((floor) {
+              final floorId = floor.id;
+              final floorData = floor.data() as Map<String, dynamic>;
+              final floorNameRaw = floorData['floorName'];
+              final floorIndex = floorData['floorIndex'];
+              final floorName = (floorNameRaw ?? '').toString().trim().isEmpty
+                  ? 'Floor ${floorIndex ?? ''}'
+                  : floorNameRaw.toString();
+
+              final roomsStream = FirebaseFirestore.instance
+                  .collection('hostels')
+                  .doc(hostelId)
+                  .collection('floors')
+                  .doc(floorId)
+                  .collection('rooms')
+                  .snapshots();
+
+              return StreamBuilder<QuerySnapshot>(
+                stream: roomsStream,
+                builder: (context, roomsSnap) {
+                  if (!roomsSnap.hasData) {
+                    return _emptyFloorRow(context, floorName);
+                  }
+
+                  final rooms = roomsSnap.data!.docs;
+                  int totalBeds = 0;
+                  int occupiedBeds = 0;
+                  for (final room in rooms) {
+                    final data = room.data() as Map<String, dynamic>;
+                    final tb = data['totalBeds'] ??
+                        data['bedCount'] ??
+                        data['beds'];
+                    if (tb is int) {
+                      totalBeds += tb;
+                    } else if (tb is String) {
+                      totalBeds += int.tryParse(tb) ?? 0;
+                    } else if (tb is List) {
+                      totalBeds += tb.length;
+                    }
+
+                    final ob = data['occupiedBeds'] ??
+                        data['allocatedBeds'] ??
+                        data['filledBeds'];
+                    if (ob is int) {
+                      occupiedBeds += ob;
+                    } else if (ob is String) {
+                      occupiedBeds += int.tryParse(ob) ?? 0;
+                    }
+                  }
+
+                  if (totalBeds == 0) {
+                    return _emptyFloorRow(context, floorName);
+                  }
+
+                  final percentage =
+                      (occupiedBeds / totalBeds).clamp(0.0, 1.0);
+
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(floorName, style: AppTextStyles.bodySmall),
+                            Text(
+                              '$occupiedBeds/$totalBeds',
+                              style: AppTextStyles.bodySmall,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: percentage,
+                            minHeight: 6,
+                            backgroundColor: Theme.of(context).dividerColor,
+                            valueColor: AlwaysStoppedAnimation(
+                              Theme.of(context).colorScheme.primary,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              );
+            }).toList(),
+          );
+        },
+      );
+    }).toList(),
   );
 }
 
