@@ -200,6 +200,7 @@ class _AddResidentScreenState extends State<AddResidentScreen> {
         'isEmailVerified': false,
         'status': 'invited',
         'hostelId': null,
+        'pgId': null,
         'floorId': null,
         'roomId': null,
         'bedId': null,

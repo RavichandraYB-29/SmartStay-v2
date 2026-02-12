@@ -188,27 +188,39 @@ class _MetricsAggregator extends StatelessWidget {
     }
 
     for (final hostel in legacyHostels.docs) {
-      final floorsSnap = await FirebaseFirestore.instance
+      final pgsSnap = await FirebaseFirestore.instance
           .collection('hostels')
           .doc(hostel.id)
-          .collection('floors')
+          .collection('pgs')
           .get();
 
-      floors += floorsSnap.docs.length;
-
-      for (final floor in floorsSnap.docs) {
-        final roomsSnap = await FirebaseFirestore.instance
+      for (final pg in pgsSnap.docs) {
+        final floorsSnap = await FirebaseFirestore.instance
             .collection('hostels')
             .doc(hostel.id)
+            .collection('pgs')
+            .doc(pg.id)
             .collection('floors')
-            .doc(floor.id)
-            .collection('rooms')
             .get();
 
-        rooms += roomsSnap.docs.length;
+        floors += floorsSnap.docs.length;
 
-        for (final room in roomsSnap.docs) {
-          beds += (room['totalBeds'] ?? 0) as int;
+        for (final floor in floorsSnap.docs) {
+          final roomsSnap = await FirebaseFirestore.instance
+              .collection('hostels')
+              .doc(hostel.id)
+              .collection('pgs')
+              .doc(pg.id)
+              .collection('floors')
+              .doc(floor.id)
+              .collection('rooms')
+              .get();
+
+          rooms += roomsSnap.docs.length;
+
+          for (final room in roomsSnap.docs) {
+            beds += (room['totalBeds'] ?? 0) as int;
+          }
         }
       }
     }
@@ -343,52 +355,107 @@ class _HostelAggregator extends StatelessWidget {
       future: FirebaseFirestore.instance
           .collection('hostels')
           .doc(hostelId)
-          .collection('floors')
+          .collection('pgs')
           .get(),
-      builder: (context, fSnap) {
-        if (!fSnap.hasData) return const SizedBox();
+      builder: (context, pSnap) {
+        if (!pSnap.hasData) return const SizedBox();
 
-        final floors = fSnap.data!.docs;
+        final pgs = pSnap.data!.docs;
+        if (pgs.isEmpty) {
+          return _HostelCard(
+            hostelId: hostelId,
+            name: name,
+            address: address,
+            adminId: adminId,
+            floors: 0,
+            rooms: 0,
+            occRooms: 0,
+            beds: 0,
+            occBeds: 0,
+            pgs: const [],
+          );
+        }
 
-        return FutureBuilder<List<QuerySnapshot>>(
+        return FutureBuilder<List<_PgAggregate>>(
           future: Future.wait(
-            floors.map(
-              (f) => FirebaseFirestore.instance
+            pgs.map((pg) async {
+              final floorsSnap = await FirebaseFirestore.instance
                   .collection('hostels')
                   .doc(hostelId)
+                  .collection('pgs')
+                  .doc(pg.id)
                   .collection('floors')
-                  .doc(f.id)
-                  .collection('rooms')
-                  .get(),
-            ),
-          ),
-          builder: (context, rSnap) {
-            if (!rSnap.hasData) return const SizedBox();
+                  .get();
 
-            int rooms = 0, occRooms = 0, beds = 0, occBeds = 0;
+              int floorsCount = floorsSnap.docs.length;
+              int rooms = 0;
+              int occRooms = 0;
+              int beds = 0;
+              int occBeds = 0;
 
-            for (final rs in rSnap.data!) {
-              for (final r in rs.docs) {
-                final d = r.data() as Map<String, dynamic>;
-                final tb = (d['totalBeds'] ?? 0) as int;
-                final ob = (d['occupiedBeds'] ?? 0) as int;
-                rooms++;
-                beds += tb;
-                occBeds += ob;
-                if (ob > 0) occRooms++;
+              for (final f in floorsSnap.docs) {
+                final roomsSnap = await FirebaseFirestore.instance
+                    .collection('hostels')
+                    .doc(hostelId)
+                    .collection('pgs')
+                    .doc(pg.id)
+                    .collection('floors')
+                    .doc(f.id)
+                    .collection('rooms')
+                    .get();
+                for (final r in roomsSnap.docs) {
+                  final d = r.data();
+                  final tbRaw = d['totalBeds'];
+                  final obRaw = d['occupiedBeds'];
+                  final tb = tbRaw is int ? tbRaw : int.tryParse('$tbRaw') ?? 0;
+                  final ob = obRaw is int ? obRaw : int.tryParse('$obRaw') ?? 0;
+                  rooms++;
+                  beds += tb;
+                  occBeds += ob;
+                  if (ob > 0) occRooms++;
+                }
               }
+
+              final pgData = pg.data() as Map<String, dynamic>;
+              final pgName = (pgData['name'] ?? pgData['pgName'] ?? 'PG')
+                  .toString();
+              return _PgAggregate(
+                pgId: pg.id,
+                pgName: pgName,
+                floors: floorsCount,
+                rooms: rooms,
+                occRooms: occRooms,
+                beds: beds,
+                occBeds: occBeds,
+              );
+            }),
+          ),
+          builder: (context, aggSnap) {
+            if (!aggSnap.hasData) return const SizedBox();
+            final aggs = aggSnap.data!;
+
+            int floors = 0, rooms = 0, occRooms = 0, beds = 0, occBeds = 0;
+            final pgOptions = <_PgOptionMini>[];
+            for (final a in aggs) {
+              floors += a.floors;
+              rooms += a.rooms;
+              occRooms += a.occRooms;
+              beds += a.beds;
+              occBeds += a.occBeds;
+              pgOptions.add(_PgOptionMini(id: a.pgId, name: a.pgName));
             }
 
             return _HostelCard(
               hostelId: hostelId,
               name: name,
               address: address,
-              adminId: this.adminId,
-              floors: floors.length,
+              adminId: adminId,
+              floors: floors,
               rooms: rooms,
               occRooms: occRooms,
               beds: beds,
               occBeds: occBeds,
+              pgs: pgOptions,
             );
           },
         );
@@ -397,9 +464,37 @@ class _HostelAggregator extends StatelessWidget {
   }
 }
 
+class _PgAggregate {
+  final String pgId;
+  final String pgName;
+  final int floors;
+  final int rooms;
+  final int occRooms;
+  final int beds;
+  final int occBeds;
+
+  _PgAggregate({
+    required this.pgId,
+    required this.pgName,
+    required this.floors,
+    required this.rooms,
+    required this.occRooms,
+    required this.beds,
+    required this.occBeds,
+  });
+}
+
+class _PgOptionMini {
+  final String id;
+  final String name;
+
+  const _PgOptionMini({required this.id, required this.name});
+}
+
 class _HostelCard extends StatelessWidget {
   final String hostelId, name, address, adminId;
   final int floors, rooms, occRooms, beds, occBeds;
+  final List<_PgOptionMini> pgs;
 
   const _HostelCard({
     required this.hostelId,
@@ -411,6 +506,7 @@ class _HostelCard extends StatelessWidget {
     required this.occRooms,
     required this.beds,
     required this.occBeds,
+    required this.pgs,
   });
 
   @override
@@ -497,16 +593,7 @@ class _HostelCard extends StatelessWidget {
                     icon: const Icon(Icons.visibility),
                     label: const Text('Manage Floors & Rooms'),
                     onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => FloorManagementScreen(
-                            hostelId: hostelId,
-                            hostelName: name,
-                            adminId: adminId,
-                          ),
-                        ),
-                      );
+                      _openPgFloorManagement(context);
                     },
                   ),
                 ),
@@ -550,6 +637,62 @@ class _HostelCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
       ),
       child: Icon(icon, size: 16, color: color),
+    );
+  }
+
+  Future<void> _openPgFloorManagement(BuildContext context) async {
+    if (pgs.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No PGs found for this hostel')),
+      );
+      return;
+    }
+    if (pgs.length == 1) {
+      final pg = pgs.first;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => FloorManagementScreen(
+            hostelId: hostelId,
+            pgId: pg.id,
+            hostelName: name,
+            pgName: pg.name,
+            adminId: adminId,
+          ),
+        ),
+      );
+      return;
+    }
+
+    final selected = await showDialog<_PgOptionMini>(
+      context: context,
+      builder: (context) {
+        return SimpleDialog(
+          title: const Text('Select PG'),
+          children: pgs
+              .map(
+                (pg) => SimpleDialogOption(
+                  onPressed: () => Navigator.pop(context, pg),
+                  child: Text(pg.name),
+                ),
+              )
+              .toList(),
+        );
+      },
+    );
+
+    if (selected == null) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => FloorManagementScreen(
+          hostelId: hostelId,
+          pgId: selected.id,
+          hostelName: name,
+          pgName: selected.name,
+          adminId: adminId,
+        ),
+      ),
     );
   }
 }

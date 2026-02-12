@@ -33,6 +33,26 @@
       { "fieldPath": "adminId", "order": "ASCENDING" },
       { "fieldPath": "dueDate", "order": "ASCENDING" }
     ]
+  },
+  {
+    "collectionGroup": "notices",
+    "queryScope": "COLLECTION",
+    "fields": [
+      { "fieldPath": "pgIds", "arrayConfig": "CONTAINS" },
+      { "fieldPath": "scope", "order": "ASCENDING" },
+      { "fieldPath": "isActive", "order": "ASCENDING" },
+      { "fieldPath": "createdAt", "order": "DESCENDING" }
+    ]
+  },
+  {
+    "collectionGroup": "notices",
+    "queryScope": "COLLECTION",
+    "fields": [
+      { "fieldPath": "residentIds", "arrayConfig": "CONTAINS" },
+      { "fieldPath": "scope", "order": "ASCENDING" },
+      { "fieldPath": "isActive", "order": "ASCENDING" },
+      { "fieldPath": "createdAt", "order": "DESCENDING" }
+    ]
   }
   ],
   "fieldOverrides": []

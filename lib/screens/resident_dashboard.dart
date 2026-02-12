@@ -20,16 +20,19 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
 
   Future<Map<String, dynamic>> _fetchAllocationMetadata(
     String? hostelId,
+    String? pgId,
     String? floorId,
     String? roomId,
   ) async {
-    if (hostelId == null || floorId == null || roomId == null) {
+    if (hostelId == null || pgId == null || floorId == null || roomId == null) {
       return {};
     }
 
     final floorRef = FirebaseFirestore.instance
         .collection('hostels')
         .doc(hostelId)
+        .collection('pgs')
+        .doc(pgId)
         .collection('floors')
         .doc(floorId);
     final roomRef = floorRef.collection('rooms').doc(roomId);
@@ -130,13 +133,17 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
 
           final hostelId =
               allocationDetails?['hostelId'] ?? residentData['hostelId'];
+          final pgId = allocationDetails?['pgId'] ?? residentData['pgId'];
           final floorId =
               allocationDetails?['floorId'] ?? residentData['floorId'];
           final roomId = allocationDetails?['roomId'] ?? residentData['roomId'];
 
           final allocationMetaFuture =
-              (hostelId != null && floorId != null && roomId != null)
-              ? _fetchAllocationMetadata(hostelId, floorId, roomId)
+              (hostelId != null &&
+                  pgId != null &&
+                  floorId != null &&
+                  roomId != null)
+              ? _fetchAllocationMetadata(hostelId, pgId, floorId, roomId)
               : Future.value(<String, dynamic>{});
 
           return FutureBuilder<Map<String, dynamic>>(
@@ -181,10 +188,13 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
                             const SizedBox(height: 24),
                             _QuickActions(
                               residentId: _residentId!,
-                              hostelId: hostelId?.toString(),
+                              pgId: pgId?.toString(),
                             ),
                             const SizedBox(height: 24),
-                            _BottomGrid(residentId: _residentId!),
+                            _BottomGrid(
+                              residentId: _residentId!,
+                              pgId: pgId?.toString(),
+                            ),
                           ] else
                             _AllocationPendingCard(),
                         ],
@@ -486,21 +496,41 @@ class _MainGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          flex: 2,
-          child: _RoomDetailsCard(
-            allocationDetails: allocationDetails,
-            residentData: residentData,
-            residentId: residentId,
-            allocationMeta: allocationMeta,
-          ),
-        ),
-        const SizedBox(width: 16),
-        Expanded(child: _QuickStatsCard(residentId: residentId)),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < 900;
+        if (isCompact) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _RoomDetailsCard(
+                allocationDetails: allocationDetails,
+                residentData: residentData,
+                residentId: residentId,
+                allocationMeta: allocationMeta,
+              ),
+              const SizedBox(height: 16),
+              _QuickStatsCard(residentId: residentId),
+            ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              flex: 2,
+              child: _RoomDetailsCard(
+                allocationDetails: allocationDetails,
+                residentData: residentData,
+                residentId: residentId,
+                allocationMeta: allocationMeta,
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(child: _QuickStatsCard(residentId: residentId)),
+          ],
+        );
+      },
     );
   }
 }
@@ -923,12 +953,22 @@ class _PaymentSection extends StatelessWidget {
                     final isPaid =
                         status?['status']?.toString().toLowerCase() == 'paid' ||
                         status?['isPaid'] == true;
+                    final dueDate = status?['dueDate'] as Timestamp?;
+                    final dueDateTime = dueDate?.toDate();
+                    final isOverdue =
+                        !isPaid &&
+                        dueDateTime != null &&
+                        DateTime.now().isAfter(dueDateTime);
 
                     return Chip(
-                      label: Text(isPaid ? 'Paid' : 'Pending'),
+                      label: Text(
+                        isPaid ? 'Paid' : (isOverdue ? 'Overdue' : 'Pending'),
+                      ),
                       backgroundColor: isPaid
                           ? Colors.green.withOpacity(0.2)
-                          : Colors.red.withOpacity(0.2),
+                          : (isOverdue
+                                ? Colors.red.withOpacity(0.2)
+                                : Colors.orange.withOpacity(0.2)),
                     );
                   },
                 ),
@@ -1016,6 +1056,95 @@ class _PaymentSection extends StatelessWidget {
                       ),
                     ],
                   ),
+                );
+              },
+            ),
+            const SizedBox(height: 20),
+            Builder(
+              builder: (context) {
+                return StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance
+                      .collection('payments')
+                      .where('residentId', isEqualTo: residentId)
+                      .orderBy('dueDate', descending: true)
+                      .limit(1)
+                      .snapshots(),
+                  builder: (context, snap) {
+                    if (!snap.hasData || snap.data!.docs.isEmpty) {
+                      return const SizedBox.shrink();
+                    }
+                    final data =
+                        snap.data!.docs.first.data() as Map<String, dynamic>;
+                    final dueDate = data['dueDate'] as Timestamp?;
+                    final isPaid =
+                        data['status']?.toString().toLowerCase() == 'paid' ||
+                        data['isPaid'] == true;
+                    final dueDateTime = dueDate?.toDate();
+                    final isOverdue =
+                        !isPaid &&
+                        dueDateTime != null &&
+                        DateTime.now().isAfter(dueDateTime);
+                    final startOfMonth = dueDateTime != null
+                        ? DateTime(dueDateTime.year, dueDateTime.month, 1)
+                        : null;
+                    final totalDays =
+                        dueDateTime != null && startOfMonth != null
+                        ? dueDateTime.difference(startOfMonth).inDays
+                        : 0;
+                    final elapsedDays =
+                        dueDateTime != null && startOfMonth != null
+                        ? DateTime.now().difference(startOfMonth).inDays
+                        : 0;
+                    final progress = totalDays > 0
+                        ? (elapsedDays / totalDays).clamp(0.0, 1.0)
+                        : 0.0;
+
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Next Due Date',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Theme.of(
+                                  context,
+                                ).textTheme.bodySmall?.color,
+                              ),
+                            ),
+                            Text(
+                              dueDateTime != null
+                                  ? DateFormat(
+                                      'MMM dd, yyyy',
+                                    ).format(dueDateTime)
+                                  : '-',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: isOverdue ? Colors.red : Colors.teal,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: LinearProgressIndicator(
+                            value: isPaid ? 1 : progress,
+                            minHeight: 8,
+                            backgroundColor: Colors.grey.withOpacity(0.2),
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              isPaid
+                                  ? Colors.green
+                                  : (isOverdue ? Colors.red : Colors.teal),
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 );
               },
             ),
@@ -1158,72 +1287,234 @@ class _PaymentInfoItem extends StatelessWidget {
 
 class _QuickActions extends StatelessWidget {
   final String residentId;
-  final String? hostelId;
+  final String? pgId;
 
-  const _QuickActions({required this.residentId, required this.hostelId});
+  const _QuickActions({required this.residentId, required this.pgId});
 
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: const [
-            Text(
-              'Quick Actions',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-            ),
-          ],
+        const Text(
+          'Quick Actions',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: () {
-                  // TODO: Navigate to raise complaint
-                },
-                icon: const Icon(Icons.notifications_outlined),
-                label: const Text('Raise Complaint'),
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  backgroundColor: Colors.orange,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ResidentNoticesScreen(
-                        residentId: residentId,
-                        hostelId: hostelId,
-                      ),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final isCompact = constraints.maxWidth < 520;
+            if (isCompact) {
+              return Column(
+                children: [
+                  _GradientActionButton(
+                    label: 'Raise Complaint',
+                    icon: Icons.notifications_outlined,
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFFF97316), Color(0xFFFB923C)],
                     ),
-                  );
-                },
-                icon: const Icon(Icons.description_outlined),
-                label: const Text('View Notices'),
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  backgroundColor: const Color(0xFF6C63FF),
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+                    onTap: () {
+                      // TODO: Navigate to raise complaint
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  _GradientActionButton(
+                    label: 'View Notices',
+                    icon: Icons.description_outlined,
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF6C63FF), Color(0xFF8B7BFF)],
+                    ),
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => ResidentNoticesScreen(
+                            residentId: residentId,
+                            pgId: pgId,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              );
+            }
+            return Row(
+              children: [
+                Expanded(
+                  child: _GradientActionButton(
+                    label: 'Raise Complaint',
+                    icon: Icons.notifications_outlined,
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFFF97316), Color(0xFFFB923C)],
+                    ),
+                    onTap: () {
+                      // TODO: Navigate to raise complaint
+                    },
                   ),
                 ),
-              ),
-            ),
-          ],
+                const SizedBox(width: 14),
+                Expanded(
+                  child: _GradientActionButton(
+                    label: 'View Notices',
+                    icon: Icons.description_outlined,
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF6C63FF), Color(0xFF8B7BFF)],
+                    ),
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => ResidentNoticesScreen(
+                            residentId: residentId,
+                            pgId: pgId,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            );
+          },
         ),
       ],
+    );
+  }
+}
+
+class _GradientActionButton extends StatefulWidget {
+  final String label;
+  final IconData icon;
+  final LinearGradient gradient;
+  final VoidCallback onTap;
+
+  const _GradientActionButton({
+    required this.label,
+    required this.icon,
+    required this.gradient,
+    required this.onTap,
+  });
+
+  @override
+  State<_GradientActionButton> createState() => _GradientActionButtonState();
+}
+
+class _GradientActionButtonState extends State<_GradientActionButton> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapCancel: () => setState(() => _pressed = false),
+      onTapUp: (_) {
+        setState(() => _pressed = false);
+        widget.onTap();
+      },
+      child: AnimatedScale(
+        duration: const Duration(milliseconds: 120),
+        scale: _pressed ? 0.98 : 1,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            gradient: widget.gradient,
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.12),
+                blurRadius: 12,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                height: 32,
+                width: 32,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(widget.icon, color: Colors.white, size: 18),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                widget.label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              const Icon(
+                Icons.arrow_forward_ios,
+                color: Colors.white,
+                size: 14,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NoticesPreviewLoading extends StatelessWidget {
+  const _NoticesPreviewLoading();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: List.generate(
+        2,
+        (index) => Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          height: 64,
+          decoration: BoxDecoration(
+            color: Theme.of(context).dividerColor.withOpacity(0.2),
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NoticesEmptyCard extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        children: [
+          Container(
+            height: 64,
+            width: 64,
+            decoration: BoxDecoration(
+              color: Colors.teal.withOpacity(0.12),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.notifications_off, color: Colors.teal),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'No Notices Yet',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Admin announcements will appear here.',
+            style: TextStyle(
+              fontSize: 12,
+              color: Theme.of(context).textTheme.bodySmall?.color,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1234,18 +1525,36 @@ class _QuickActions extends StatelessWidget {
 
 class _BottomGrid extends StatelessWidget {
   final String residentId;
+  final String? pgId;
 
-  const _BottomGrid({required this.residentId});
+  const _BottomGrid({required this.residentId, required this.pgId});
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(child: _ComplaintsCard(residentId: residentId)),
-        const SizedBox(width: 16),
-        Expanded(child: _NoticesPlaceholderCard()),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < 900;
+        if (isCompact) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _ComplaintsCard(residentId: residentId),
+              const SizedBox(height: 16),
+              _NoticesPreviewCard(residentId: residentId, pgId: pgId),
+            ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: _ComplaintsCard(residentId: residentId)),
+            const SizedBox(width: 16),
+            Expanded(
+              child: _NoticesPreviewCard(residentId: residentId, pgId: pgId),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -1263,6 +1572,319 @@ class _ComplaintsCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         side: BorderSide(color: Theme.of(context).dividerColor),
       ),
+      child: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection('complaints')
+            .where('residentId', isEqualTo: residentId)
+            .orderBy('createdAt', descending: true)
+            .limit(3)
+            .snapshots(),
+        builder: (context, snap) {
+          final docs = snap.data?.docs ?? [];
+          final totalCount = docs.length;
+
+          return Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Icon(
+                            Icons.notifications_outlined,
+                            color: Colors.orange,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        const Text(
+                          'My Complaints',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            totalCount.toString(),
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.orange,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        // TODO: View all complaints
+                      },
+                      child: const Text('View All'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                if (docs.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      children: [
+                        Icon(
+                          Icons.check_circle_outline,
+                          color: Colors.green.withOpacity(0.6),
+                          size: 40,
+                        ),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'No Complaints',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'You are all set. No pending issues.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(context).textTheme.bodySmall?.color,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  Column(
+                    children: docs.map((doc) {
+                      final data = doc.data() as Map<String, dynamic>;
+                      final title = data['title'] ?? 'Untitled';
+                      final category = data['category'] ?? 'General';
+                      final status =
+                          data['status']?.toString().toLowerCase() ?? '';
+                      final createdAt = data['createdAt'] as Timestamp?;
+                      final priority =
+                          data['priority']?.toString().toLowerCase() ?? '';
+
+                      final isResolved =
+                          status == 'resolved' || status == 'closed';
+                      final badgeColor = isResolved
+                          ? Colors.green
+                          : Colors.orange;
+
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).cardColor,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: Theme.of(context).dividerColor,
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    title,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: badgeColor.withOpacity(0.12),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Text(
+                                    isResolved ? 'Resolved' : 'In Progress',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: badgeColor,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Category: $category',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Theme.of(
+                                  context,
+                                ).textTheme.bodySmall?.color,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Row(
+                              children: [
+                                Text(
+                                  createdAt != null
+                                      ? DateFormat(
+                                          'MMM dd, yyyy',
+                                        ).format(createdAt.toDate())
+                                      : '-',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Theme.of(
+                                      context,
+                                    ).textTheme.bodySmall?.color,
+                                  ),
+                                ),
+                                const Spacer(),
+                                if (priority.isNotEmpty)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 4,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey.withOpacity(0.15),
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Text(
+                                      priority,
+                                      style: const TextStyle(fontSize: 11),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _NoticesPreviewCard extends StatelessWidget {
+  final String residentId;
+  final String? pgId;
+
+  const _NoticesPreviewCard({required this.residentId, required this.pgId});
+
+  Stream<QuerySnapshot> _allNoticesStream() {
+    if (pgId == null || pgId!.isEmpty) {
+      return Stream.empty();
+    }
+    return FirebaseFirestore.instance
+        .collection('notices')
+        .where('scope', isEqualTo: 'ALL')
+        .where('senderRole', isEqualTo: 'admin')
+        .where('isActive', isEqualTo: true)
+        .where('pgIds', arrayContains: pgId)
+        .orderBy('createdAt', descending: true)
+        .limit(3)
+        .snapshots();
+  }
+
+  Stream<QuerySnapshot> _hostelNoticesStream() {
+    if (pgId == null || pgId!.isEmpty) {
+      return Stream.empty();
+    }
+    return FirebaseFirestore.instance
+        .collection('notices')
+        .where('scope', isEqualTo: 'PG')
+        .where('senderRole', isEqualTo: 'admin')
+        .where('isActive', isEqualTo: true)
+        .where('pgIds', arrayContains: pgId)
+        .orderBy('createdAt', descending: true)
+        .limit(3)
+        .snapshots();
+  }
+
+  Stream<QuerySnapshot> _residentNoticesStream() {
+    return FirebaseFirestore.instance
+        .collection('notices')
+        .where('scope', isEqualTo: 'RESIDENT')
+        .where('senderRole', isEqualTo: 'admin')
+        .where('isActive', isEqualTo: true)
+        .where('residentIds', arrayContains: residentId)
+        .orderBy('createdAt', descending: true)
+        .limit(3)
+        .snapshots();
+  }
+
+  List<QueryDocumentSnapshot> _mergeNotices(
+    List<QueryDocumentSnapshot> a,
+    List<QueryDocumentSnapshot> b,
+    List<QueryDocumentSnapshot> c,
+  ) {
+    final map = <String, QueryDocumentSnapshot>{};
+    for (final doc in a) {
+      map[doc.id] = doc;
+    }
+    for (final doc in b) {
+      map[doc.id] = doc;
+    }
+    for (final doc in c) {
+      map[doc.id] = doc;
+    }
+    final merged = map.values.toList();
+    merged.sort((x, y) {
+      final xData = x.data() as Map<String, dynamic>;
+      final yData = y.data() as Map<String, dynamic>;
+      final xTime = xData['createdAt'] as Timestamp?;
+      final yTime = yData['createdAt'] as Timestamp?;
+      final xMillis = xTime?.millisecondsSinceEpoch ?? 0;
+      final yMillis = yTime?.millisecondsSinceEpoch ?? 0;
+      return yMillis.compareTo(xMillis);
+    });
+    return merged.take(3).toList();
+  }
+
+  bool _isRead(Map<String, dynamic> data) {
+    final readers = data['readBy'];
+    if (readers is Iterable) {
+      return readers.contains(residentId);
+    }
+    return false;
+  }
+
+  String _formatDate(Timestamp? createdAt) {
+    if (createdAt == null) return '—';
+    return DateFormat('MMM dd, yyyy').format(createdAt.toDate());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (pgId == null || pgId!.isEmpty) {
+      return _NoticesEmptyCard();
+    }
+    return Card(
+      elevation: 2,
+      shadowColor: Colors.black.withOpacity(0.08),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -1276,17 +1898,17 @@ class _ComplaintsCard extends StatelessWidget {
                     Container(
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: Colors.orange.withOpacity(0.1),
+                        color: const Color(0xFF6C63FF).withOpacity(0.1),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: const Icon(
-                        Icons.notifications_outlined,
-                        color: Colors.orange,
+                        Icons.description_outlined,
+                        color: Color(0xFF6C63FF),
                       ),
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 10),
                     const Text(
-                      'My Complaints',
+                      'Recent Notices',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w600,
@@ -1296,146 +1918,193 @@ class _ComplaintsCard extends StatelessWidget {
                 ),
                 TextButton(
                   onPressed: () {
-                    // TODO: View all complaints
+                    if (pgId == null) return;
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ResidentNoticesScreen(
+                          residentId: residentId,
+                          pgId: pgId,
+                        ),
+                      ),
+                    );
                   },
                   child: const Text('View All'),
                 ),
               ],
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
             StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('complaints')
-                  .where('residentId', isEqualTo: residentId)
-                  .orderBy('createdAt', descending: true)
-                  .limit(3)
-                  .snapshots(),
-              builder: (context, snap) {
-                if (!snap.hasData || snap.data!.docs.isEmpty) {
-                  return const Padding(
-                    padding: EdgeInsets.all(20),
-                    child: Center(child: Text('No complaints')),
-                  );
+              stream: _allNoticesStream(),
+              builder: (context, allSnap) {
+                if (allSnap.hasError) {
+                  return _NoticesEmptyCard();
                 }
+                if (allSnap.connectionState == ConnectionState.waiting) {
+                  return const _NoticesPreviewLoading();
+                }
+                final allDocs = allSnap.data?.docs ?? [];
 
-                return Column(
-                  children: snap.data!.docs.map((doc) {
-                    final data = doc.data() as Map<String, dynamic>;
-                    final title = data['title'] ?? 'Untitled';
-                    final category = data['category'] ?? 'General';
-                    final status =
-                        data['status']?.toString().toLowerCase() ?? '';
-                    final createdAt = data['createdAt'] as Timestamp?;
-                    final priority =
-                        data['priority']?.toString().toLowerCase() ?? '';
+                final hostelStream = pgId == null
+                    ? Stream<QuerySnapshot?>.value(null)
+                    : _hostelNoticesStream();
+                return StreamBuilder<QuerySnapshot?>(
+                  stream: hostelStream,
+                  builder: (context, hostelSnap) {
+                    if (hostelSnap.hasError) {
+                      return _NoticesEmptyCard();
+                    }
+                    if (pgId != null &&
+                        hostelSnap.connectionState == ConnectionState.waiting) {
+                      return const _NoticesPreviewLoading();
+                    }
+                    final hostelDocs = hostelSnap.data?.docs ?? [];
 
-                    final isResolved =
-                        status == 'resolved' || status == 'closed';
+                    return StreamBuilder<QuerySnapshot>(
+                      stream: _residentNoticesStream(),
+                      builder: (context, residentSnap) {
+                        if (residentSnap.hasError) {
+                          return _NoticesEmptyCard();
+                        }
+                        if (residentSnap.connectionState ==
+                            ConnectionState.waiting) {
+                          return const _NoticesPreviewLoading();
+                        }
 
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).cardColor,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: Theme.of(context).dividerColor,
-                        ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  title,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w600,
+                        final residentDocs = residentSnap.data?.docs ?? [];
+                        final merged = _mergeNotices(
+                          allDocs,
+                          hostelDocs,
+                          residentDocs,
+                        );
+
+                        if (merged.isEmpty) {
+                          return _NoticesEmptyCard();
+                        }
+
+                        return Column(
+                          children: merged.map((doc) {
+                            final data = doc.data() as Map<String, dynamic>;
+                            final title = (data['title'] ?? 'Notice')
+                                .toString();
+                            final message = (data['message'] ?? '').toString();
+                            final createdAt = data['createdAt'] as Timestamp?;
+                            final isRead = _isRead(data);
+                            final noticeType = (data['noticeType'] ?? 'Notice')
+                                .toString();
+
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: Theme.of(context).cardColor,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: Theme.of(context).dividerColor,
+                                ),
+                              ),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Container(
+                                    width: 6,
+                                    height: 52,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF14B8A6),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
                                   ),
-                                ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                title,
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                            ),
+                                            Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 8,
+                                                    vertical: 4,
+                                                  ),
+                                              decoration: BoxDecoration(
+                                                color: const Color(
+                                                  0xFF6C63FF,
+                                                ).withOpacity(0.12),
+                                                borderRadius:
+                                                    BorderRadius.circular(10),
+                                              ),
+                                              child: Text(
+                                                noticeType,
+                                                style: const TextStyle(
+                                                  fontSize: 10,
+                                                  color: Color(0xFF6C63FF),
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          message.isEmpty
+                                              ? 'No message provided.'
+                                              : message,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Theme.of(
+                                              context,
+                                            ).textTheme.bodySmall?.color,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Row(
+                                          children: [
+                                            Text(
+                                              _formatDate(createdAt),
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: Theme.of(
+                                                  context,
+                                                ).textTheme.bodySmall?.color,
+                                              ),
+                                            ),
+                                            const Spacer(),
+                                            if (!isRead)
+                                              Container(
+                                                width: 8,
+                                                height: 8,
+                                                decoration: const BoxDecoration(
+                                                  color: Colors.teal,
+                                                  shape: BoxShape.circle,
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                               ),
-                              Chip(
-                                label: Text(
-                                  isResolved ? 'Resolved' : 'In Progress',
-                                ),
-                                backgroundColor: isResolved
-                                    ? Colors.green.withOpacity(0.2)
-                                    : Colors.orange.withOpacity(0.2),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Category: $category',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Theme.of(
-                                context,
-                              ).textTheme.bodySmall?.color,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                createdAt != null
-                                    ? DateFormat(
-                                        'MMM dd, yyyy',
-                                      ).format(createdAt.toDate())
-                                    : '-',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Theme.of(
-                                    context,
-                                  ).textTheme.bodySmall?.color,
-                                ),
-                              ),
-                              if (priority.isNotEmpty)
-                                Chip(
-                                  label: Text(priority),
-                                  backgroundColor: Colors.grey.withOpacity(0.2),
-                                ),
-                            ],
-                          ),
-                        ],
-                      ),
+                            );
+                          }).toList(),
+                        );
+                      },
                     );
-                  }).toList(),
+                  },
                 );
               },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _NoticesPlaceholderCard extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: Theme.of(context).dividerColor),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
-            Text(
-              'Notices',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-            ),
-            SizedBox(height: 8),
-            Text(
-              'Use View Notices to see admin announcements.',
-              style: TextStyle(fontSize: 13, color: Colors.black54),
             ),
           ],
         ),

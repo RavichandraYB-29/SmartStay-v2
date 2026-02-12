@@ -4,11 +4,13 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 class AddFloorDialog extends StatefulWidget {
   final String hostelId;
+  final String pgId;
   final String adminId;
 
   const AddFloorDialog({
     super.key,
     required this.hostelId,
+    required this.pgId,
     required this.adminId,
   });
 
@@ -189,27 +191,29 @@ class _AddFloorDialogState extends State<AddFloorDialog> {
     final hostelRef = FirebaseFirestore.instance
         .collection('hostels')
         .doc(widget.hostelId);
+    final pgRef = hostelRef.collection('pgs').doc(widget.pgId);
 
     await FirebaseFirestore.instance.runTransaction((transaction) async {
-      final hostelSnap = await transaction.get(hostelRef);
+      final pgSnap = await transaction.get(pgRef);
 
-      final currentFloors = hostelSnap['floors'] ?? 0;
+      final currentFloors = pgSnap.data()?['floors'] ?? 0;
       final newFloorIndex = currentFloors;
 
-      final floorRef = hostelRef.collection('floors').doc();
+      final floorRef = pgRef.collection('floors').doc();
 
       transaction.set(floorRef, {
         'floorIndex': newFloorIndex,
         'floorName': _floorNameController.text.trim(),
         'adminId': widget.adminId,
         'totalRooms': 0,
-        'occupiedRooms': 0,
         'totalBeds': 0,
-        'occupiedBeds': 0,
+        'availableBeds': 0,
         'createdAt': FieldValue.serverTimestamp(),
+        'hostelId': widget.hostelId,
+        'pgId': widget.pgId,
       });
 
-      transaction.update(hostelRef, {'floors': currentFloors + 1});
+      transaction.update(pgRef, {'floors': currentFloors + 1});
     });
 
     if (mounted) Navigator.pop(context);

@@ -201,13 +201,13 @@ class _StatsRow extends StatelessWidget {
         .where('adminId', isEqualTo: adminId)
         .snapshots();
 
-    final roomsStream = FirebaseFirestore.instance
-        .collectionGroup('rooms')
+    final pgsStream = FirebaseFirestore.instance
+        .collectionGroup('pgs')
         .where('adminId', isEqualTo: adminId)
         .snapshots();
-    final roomsFallbackStream = FirebaseFirestore.instance
-        .collectionGroup('rooms')
-        .where('createdByAdminId', isEqualTo: adminId)
+    final pgsFallbackStream = FirebaseFirestore.instance
+        .collectionGroup('pgs')
+        .where('ownerId', isEqualTo: adminId)
         .snapshots();
 
     final complaintsStream = FirebaseFirestore.instance
@@ -221,29 +221,29 @@ class _StatsRow extends StatelessWidget {
         .snapshots();
 
     return StreamBuilder<QuerySnapshot>(
-      stream: roomsStream,
-      builder: (context, roomsSnap) {
-        if (roomsSnap.hasError) {
+      stream: pgsStream,
+      builder: (context, pgsSnap) {
+        if (pgsSnap.hasError) {
           return _buildStatsGrid(
             context: context,
-            roomsDocs: const [],
+            pgDocs: const [],
             residentsStream: residentsStream,
             complaintsStream: complaintsStream,
             paymentsStream: paymentsStream,
           );
         }
-        if (!roomsSnap.hasData) {
+        if (!pgsSnap.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
-        final roomsDocs = roomsSnap.data?.docs ?? [];
-        if (roomsDocs.isEmpty) {
+        final pgDocs = pgsSnap.data?.docs ?? [];
+        if (pgDocs.isEmpty) {
           return StreamBuilder<QuerySnapshot>(
-            stream: roomsFallbackStream,
+            stream: pgsFallbackStream,
             builder: (context, fallbackSnap) {
               if (fallbackSnap.hasError) {
                 return _buildStatsGrid(
                   context: context,
-                  roomsDocs: const [],
+                  pgDocs: const [],
                   residentsStream: residentsStream,
                   complaintsStream: complaintsStream,
                   paymentsStream: paymentsStream,
@@ -252,10 +252,10 @@ class _StatsRow extends StatelessWidget {
               if (!fallbackSnap.hasData) {
                 return const Center(child: CircularProgressIndicator());
               }
-              final fallbackRooms = fallbackSnap.data?.docs ?? [];
+              final fallbackPgs = fallbackSnap.data?.docs ?? [];
               return _buildStatsGrid(
                 context: context,
-                roomsDocs: fallbackRooms,
+                pgDocs: fallbackPgs,
                 residentsStream: residentsStream,
                 complaintsStream: complaintsStream,
                 paymentsStream: paymentsStream,
@@ -265,7 +265,7 @@ class _StatsRow extends StatelessWidget {
         }
         return _buildStatsGrid(
           context: context,
-          roomsDocs: roomsDocs,
+          pgDocs: pgDocs,
           residentsStream: residentsStream,
           complaintsStream: complaintsStream,
           paymentsStream: paymentsStream,
@@ -277,13 +277,22 @@ class _StatsRow extends StatelessWidget {
 
 Widget _buildStatsGrid({
   required BuildContext context,
-  required List<QueryDocumentSnapshot> roomsDocs,
+  required List<QueryDocumentSnapshot> pgDocs,
   required Stream<QuerySnapshot> residentsStream,
   required Stream<QuerySnapshot> complaintsStream,
   required Stream<QuerySnapshot> paymentsStream,
 }) {
-  final totalBeds = _totalBedsFromRooms(roomsDocs);
-  final occupiedFromRooms = _occupiedBedsFromRooms(roomsDocs);
+  int totalBeds = 0;
+  int availableBeds = 0;
+  for (final doc in pgDocs) {
+    final data = doc.data() as Map<String, dynamic>;
+    final tbRaw = data['totalBeds'];
+    final abRaw = data['availableBeds'];
+    final tb = tbRaw is int ? tbRaw : int.tryParse('$tbRaw') ?? 0;
+    final ab = abRaw is int ? abRaw : int.tryParse('$abRaw') ?? 0;
+    totalBeds += tb;
+    availableBeds += ab;
+  }
 
   return StreamBuilder<QuerySnapshot>(
     stream: residentsStream,
@@ -295,14 +304,13 @@ Widget _buildStatsGrid({
         return data['isAllocated'] == true;
       }).length;
 
-      final actualOccupiedBeds =
-          occupiedFromRooms > 0 ? occupiedFromRooms : allocatedResidents;
-      final availableBeds = (totalBeds - actualOccupiedBeds).clamp(
+      final actualOccupiedBeds = (totalBeds - availableBeds).clamp(
         0,
         totalBeds,
       );
-      final occupancyPercentage =
-          totalBeds > 0 ? (actualOccupiedBeds / totalBeds * 100).round() : 0;
+      final occupancyPercentage = totalBeds > 0
+          ? (actualOccupiedBeds / totalBeds * 100).round()
+          : 0;
 
       return StreamBuilder<QuerySnapshot>(
         stream: complaintsStream,
@@ -321,53 +329,55 @@ Widget _buildStatsGrid({
               final pendingFromPayments = _sumPendingFeesFromPayments(
                 paymentDocs,
               );
-              final pendingFromResidents =
-                  _sumPendingFeesFromResidents(residentsDocs);
+              final pendingFromResidents = _sumPendingFeesFromResidents(
+                residentsDocs,
+              );
 
               final pendingTotal = pendingFromPayments > 0
                   ? pendingFromPayments
                   : pendingFromResidents;
 
               final cards = [
-                  _StatCard(
-                    icon: Icons.people,
-                    title: 'Total Residents',
-                    value: totalResidents.toString(),
-                    change: '+$allocatedResidents allocated',
-                    changeType: 'positive',
-                  ),
-                  _StatCard(
-                    icon: Icons.bed,
-                    title: 'Available Beds',
-                    value: availableBeds.toString(),
-                    showProgress: true,
-                    progressValue:
-                        totalBeds == 0 ? 0 : actualOccupiedBeds / totalBeds,
-                    change: 'Out of $totalBeds total',
-                    occupancy: occupancyPercentage,
-                  ),
-                  _StatCard(
-                    icon: Icons.currency_rupee,
-                    title: 'Pending Fees',
-                    value: '₹$pendingTotal',
-                    change: '${_countPendingResidents(paymentDocs)} residents',
-                    changeType: 'warning',
-                  ),
-                  _StatCard(
-                    icon: Icons.notifications_active,
-                    title: 'Open Complaints',
-                    value: openComplaints.toString(),
-                    change:
-                        '${complaintsDocs.where((c) {
+                _StatCard(
+                  icon: Icons.people,
+                  title: 'Total Residents',
+                  value: totalResidents.toString(),
+                  change: '+$allocatedResidents allocated',
+                  changeType: 'positive',
+                ),
+                _StatCard(
+                  icon: Icons.bed,
+                  title: 'Available Beds',
+                  value: availableBeds.toString(),
+                  showProgress: true,
+                  progressValue: totalBeds == 0
+                      ? 0
+                      : actualOccupiedBeds / totalBeds,
+                  change: 'Out of $totalBeds total',
+                  occupancy: occupancyPercentage,
+                ),
+                _StatCard(
+                  icon: Icons.currency_rupee,
+                  title: 'Pending Fees',
+                  value: '₹$pendingTotal',
+                  change: '${_countPendingResidents(paymentDocs)} residents',
+                  changeType: 'warning',
+                ),
+                _StatCard(
+                  icon: Icons.notifications_active,
+                  title: 'Open Complaints',
+                  value: openComplaints.toString(),
+                  change:
+                      '${complaintsDocs.where((c) {
                         final data = c.data() as Map<String, dynamic>;
                         final createdAt = data['createdAt'] as Timestamp?;
-                          if (createdAt == null) return false;
-                          final now = DateTime.now();
-                          final created = createdAt.toDate();
-                          return now.difference(created).inDays == 0;
-                        }).length} new today',
-                    changeType: 'warning',
-                  ),
+                        if (createdAt == null) return false;
+                        final now = DateTime.now();
+                        final created = createdAt.toDate();
+                        return now.difference(created).inDays == 0;
+                      }).length} new today',
+                  changeType: 'warning',
+                ),
               ];
 
               return LayoutBuilder(
@@ -376,8 +386,8 @@ Widget _buildStatsGrid({
                   final crossAxisCount = width >= 1100
                       ? 4
                       : width >= 760
-                          ? 2
-                          : 1;
+                      ? 2
+                      : 1;
                   return GridView.count(
                     crossAxisCount: crossAxisCount,
                     shrinkWrap: true,
@@ -535,7 +545,9 @@ class _StatCard extends StatelessWidget {
                           style: TextStyle(
                             fontSize: 10,
                             fontWeight: FontWeight.w600,
-                            color: Theme.of(context).textTheme.bodyMedium?.color,
+                            color: Theme.of(
+                              context,
+                            ).textTheme.bodyMedium?.color,
                           ),
                         ),
                     ],
@@ -642,15 +654,28 @@ class SendNoticeScreen extends StatefulWidget {
   State<SendNoticeScreen> createState() => _SendNoticeScreenState();
 }
 
+class _PgOption {
+  final String pgId;
+  final String label;
+  final String hostelId;
+
+  const _PgOption({
+    required this.pgId,
+    required this.label,
+    required this.hostelId,
+  });
+}
+
 class _SendNoticeScreenState extends State<SendNoticeScreen> {
   final _titleController = TextEditingController();
   final _messageController = TextEditingController();
 
   String _noticeType = '';
-  String _audience = '';
-  String _selectedHostelId = '';
+  String _scope = '';
+  String _selectedPgId = '';
   String _selectedResidentId = '';
   String _selectedResidentLabel = '';
+  late final Future<List<_PgOption>> _pgsFuture = _loadPgsForAdmin();
 
   final _noticeTypes = const [
     {
@@ -683,9 +708,9 @@ class _SendNoticeScreenState extends State<SendNoticeScreen> {
     if (_titleController.text.trim().isEmpty) return false;
     if (_messageController.text.trim().isEmpty) return false;
     if (_noticeType.isEmpty) return false;
-    if (_audience.isEmpty) return false;
-    if (_audience == 'hostel' && _selectedHostelId.isEmpty) return false;
-    if (_audience == 'resident' && _selectedResidentId.isEmpty) {
+    if (_scope.isEmpty) return false;
+    if (_scope == 'PG' && _selectedPgId.isEmpty) return false;
+    if (_scope == 'RESIDENT' && _selectedResidentId.isEmpty) {
       return false;
     }
     return true;
@@ -702,29 +727,38 @@ class _SendNoticeScreenState extends State<SendNoticeScreen> {
     if (!_isFormValid) return;
     final adminUid = FirebaseAuth.instance.currentUser?.uid;
     if (adminUid == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to publish notice')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Failed to publish notice')));
       return;
     }
 
     try {
+      final pgIds = <String>[];
+      if (_scope == 'ALL') {
+        final pgs = await _loadPgsForAdmin();
+        pgIds.addAll(pgs.map((p) => p.pgId));
+      } else if (_scope == 'PG') {
+        pgIds.add(_selectedPgId);
+      }
+
       final docRef = FirebaseFirestore.instance.collection('notices').doc();
       final payload = <String, dynamic>{
         'noticeId': docRef.id,
         'title': _titleController.text.trim(),
-        'description': _messageController.text.trim(),
-        'noticeType': _noticeType,
-        'audienceType': _audience,
+        'message': _messageController.text.trim(),
+        'noticeType': _noticeTypeLabel(_noticeType),
+        'scope': _scope,
+        'senderRole': 'admin',
         'createdByAdminId': adminUid,
+        'hostelOwnerId': adminUid,
+        'pgIds': pgIds,
+        'residentIds': _scope == 'RESIDENT'
+            ? [_selectedResidentId]
+            : <String>[],
+        'isActive': true,
         'createdAt': FieldValue.serverTimestamp(),
       };
-
-      if (_audience == 'hostel') {
-        payload['hostelId'] = _selectedHostelId;
-      } else if (_audience == 'resident') {
-        payload['residentId'] = _selectedResidentId;
-      }
 
       await docRef.set(payload);
 
@@ -733,10 +767,76 @@ class _SendNoticeScreenState extends State<SendNoticeScreen> {
         const SnackBar(content: Text('Notice published successfully')),
       );
     } catch (_) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to publish notice')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Failed to publish notice')));
     }
+  }
+
+  String _noticeTypeLabel(String raw) {
+    switch (raw.toLowerCase()) {
+      case 'general':
+        return 'General';
+      case 'maintenance':
+        return 'Maintenance';
+      case 'payment':
+        return 'Payment';
+      case 'warning':
+        return 'Warning';
+      default:
+        return raw;
+    }
+  }
+
+  Future<List<_PgOption>> _loadPgsForAdmin() async {
+    final adminUid = FirebaseAuth.instance.currentUser?.uid;
+    if (adminUid == null) return [];
+
+    final hostelsByAdmin = await FirebaseFirestore.instance
+        .collection('hostels')
+        .where('adminId', isEqualTo: adminUid)
+        .get();
+    final hostelsByOwner = await FirebaseFirestore.instance
+        .collection('hostels')
+        .where('ownerId', isEqualTo: adminUid)
+        .get();
+
+    final hostels = <String, QueryDocumentSnapshot>{};
+    for (final doc in hostelsByAdmin.docs) {
+      hostels[doc.id] = doc;
+    }
+    for (final doc in hostelsByOwner.docs) {
+      hostels[doc.id] = doc;
+    }
+
+    final pgs = <_PgOption>[];
+    for (final entry in hostels.entries) {
+      final hostelId = entry.key;
+      final hostelData = entry.value.data() as Map<String, dynamic>;
+      final hostelName =
+          (hostelData['name'] ?? hostelData['hostelName'] ?? 'Hostel')
+              .toString();
+
+      final pgSnap = await FirebaseFirestore.instance
+          .collection('hostels')
+          .doc(hostelId)
+          .collection('pgs')
+          .get();
+      for (final pgDoc in pgSnap.docs) {
+        final pgData = pgDoc.data();
+        final pgName = (pgData['name'] ?? pgData['pgName'] ?? 'PG').toString();
+        pgs.add(
+          _PgOption(
+            pgId: pgDoc.id,
+            hostelId: hostelId,
+            label: '$pgName • $hostelName',
+          ),
+        );
+      }
+    }
+
+    pgs.sort((a, b) => a.label.compareTo(b.label));
+    return pgs;
   }
 
   void _handleCancel() {
@@ -819,10 +919,7 @@ class _SendNoticeScreenState extends State<SendNoticeScreen> {
                         SizedBox(height: 2),
                         Text(
                           'Dashboard → Communication → Send Notice',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.black54,
-                          ),
+                          style: TextStyle(fontSize: 12, color: Colors.black54),
                         ),
                       ],
                     ),
@@ -856,7 +953,10 @@ class _SendNoticeScreenState extends State<SendNoticeScreen> {
                             ),
                             child: const Row(
                               children: [
-                                Icon(Icons.description, color: Color(0xFF4F46E5)),
+                                Icon(
+                                  Icons.description,
+                                  color: Color(0xFF4F46E5),
+                                ),
                                 SizedBox(width: 8),
                                 Text(
                                   'Notice Details',
@@ -897,7 +997,8 @@ class _SendNoticeScreenState extends State<SendNoticeScreen> {
                                   controller: _messageController,
                                   maxLines: 6,
                                   decoration: const InputDecoration(
-                                    hintText: 'Enter your notice message here...',
+                                    hintText:
+                                        'Enter your notice message here...',
                                     border: OutlineInputBorder(),
                                   ),
                                   onChanged: (_) => setState(() {}),
@@ -938,7 +1039,10 @@ class _SendNoticeScreenState extends State<SendNoticeScreen> {
                             ),
                             child: const Row(
                               children: [
-                                Icon(Icons.local_offer, color: Color(0xFF7C3AED)),
+                                Icon(
+                                  Icons.local_offer,
+                                  color: Color(0xFF7C3AED),
+                                ),
                                 SizedBox(width: 8),
                                 Text(
                                   'Notice Type',
@@ -972,11 +1076,15 @@ class _SendNoticeScreenState extends State<SendNoticeScreen> {
                                         width: 240,
                                         padding: const EdgeInsets.all(14),
                                         decoration: BoxDecoration(
-                                          borderRadius: BorderRadius.circular(14),
+                                          borderRadius: BorderRadius.circular(
+                                            14,
+                                          ),
                                           border: Border.all(
                                             color: isSelected
                                                 ? typeColor
-                                                : Theme.of(context).dividerColor,
+                                                : Theme.of(
+                                                    context,
+                                                  ).dividerColor,
                                             width: 2,
                                           ),
                                           color: isSelected
@@ -1046,8 +1154,9 @@ class _SendNoticeScreenState extends State<SendNoticeScreen> {
                                       ),
                                       borderRadius: BorderRadius.circular(12),
                                       border: Border.all(
-                                        color: const Color(0xFF4F46E5)
-                                            .withOpacity(0.2),
+                                        color: const Color(
+                                          0xFF4F46E5,
+                                        ).withOpacity(0.2),
                                       ),
                                     ),
                                     child: Row(
@@ -1066,9 +1175,11 @@ class _SendNoticeScreenState extends State<SendNoticeScreen> {
                                             vertical: 4,
                                           ),
                                           decoration: BoxDecoration(
-                                            color: selectedType['color'] as Color,
-                                            borderRadius:
-                                                BorderRadius.circular(12),
+                                            color:
+                                                selectedType['color'] as Color,
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
                                           ),
                                           child: Text(
                                             selectedType['label'] as String,
@@ -1127,43 +1238,44 @@ class _SendNoticeScreenState extends State<SendNoticeScreen> {
                             child: Column(
                               children: [
                                 RadioListTile<String>(
-                                  value: 'all',
-                                  groupValue: _audience,
+                                  value: 'ALL',
+                                  groupValue: _scope,
                                   onChanged: (value) {
                                     setState(() {
-                                      _audience = value ?? '';
-                                      _selectedHostelId = '';
+                                      _scope = value ?? '';
+                                      _selectedPgId = '';
                                       _selectedResidentId = '';
                                       _selectedResidentLabel = '';
                                     });
                                   },
                                   title: const Text('All Residents'),
-                                  subtitle:
-                                      const Text('Send to every resident'),
+                                  subtitle: const Text(
+                                    'Send to every resident',
+                                  ),
                                   secondary: const Icon(Icons.groups),
                                 ),
                                 RadioListTile<String>(
-                                  value: 'hostel',
-                                  groupValue: _audience,
+                                  value: 'PG',
+                                  groupValue: _scope,
                                   onChanged: (value) {
                                     setState(() {
-                                      _audience = value ?? '';
-                                      _selectedHostelId = '';
+                                      _scope = value ?? '';
+                                      _selectedPgId = '';
                                       _selectedResidentId = '';
                                       _selectedResidentLabel = '';
                                     });
                                   },
-                                  title: const Text('Specific Hostel (PG)'),
-                                  subtitle: const Text('Send to one hostel'),
+                                  title: const Text('Specific PG'),
+                                  subtitle: const Text('Send to one PG'),
                                   secondary: const Icon(Icons.apartment),
                                 ),
                                 RadioListTile<String>(
-                                  value: 'resident',
-                                  groupValue: _audience,
+                                  value: 'RESIDENT',
+                                  groupValue: _scope,
                                   onChanged: (value) {
                                     setState(() {
-                                      _audience = value ?? '';
-                                      _selectedHostelId = '';
+                                      _scope = value ?? '';
+                                      _selectedPgId = '';
                                       _selectedResidentId = '';
                                       _selectedResidentLabel = '';
                                     });
@@ -1173,55 +1285,43 @@ class _SendNoticeScreenState extends State<SendNoticeScreen> {
                                   secondary: const Icon(Icons.person),
                                 ),
                                 const SizedBox(height: 12),
-                                if (_audience == 'hostel') ...[
+                                if (_scope == 'PG') ...[
                                   const Align(
                                     alignment: Alignment.centerLeft,
                                     child: Text(
-                                      'Select Hostel *',
+                                      'Select PG *',
                                       style: TextStyle(fontSize: 12),
                                     ),
                                   ),
                                   const SizedBox(height: 8),
-                                  StreamBuilder<QuerySnapshot>(
-                                    stream: FirebaseFirestore.instance
-                                        .collection('hostels')
-                                        .where(
-                                          'adminId',
-                                          isEqualTo: FirebaseAuth
-                                              .instance.currentUser?.uid,
-                                        )
-                                        .snapshots(),
+                                  FutureBuilder<List<_PgOption>>(
+                                    future: _pgsFuture,
                                     builder: (context, snap) {
-                                      final items = snap.data?.docs ?? [];
+                                      final items = snap.data ?? [];
                                       return DropdownButtonFormField<String>(
-                                        value: _selectedHostelId.isEmpty
+                                        value: _selectedPgId.isEmpty
                                             ? null
-                                            : _selectedHostelId,
+                                            : _selectedPgId,
                                         decoration: const InputDecoration(
                                           border: OutlineInputBorder(),
-                                          hintText: 'Select hostel',
+                                          hintText: 'Select PG',
                                         ),
-                                        items: items.map((doc) {
-                                          final data =
-                                              doc.data() as Map<String, dynamic>;
-                                          final label = data['name'] ??
-                                              data['hostelName'] ??
-                                              'Hostel';
+                                        items: items.map((pg) {
                                           return DropdownMenuItem<String>(
-                                            value: doc.id,
-                                            child: Text(label.toString()),
+                                            value: pg.pgId,
+                                            child: Text(pg.label),
                                           );
                                         }).toList(),
                                         onChanged: (value) {
                                           setState(() {
-                                            _selectedHostelId = value ?? '';
+                                            _selectedPgId = value ?? '';
                                           });
                                         },
                                       );
                                     },
                                   ),
                                 ],
-                                if (_audience == 'resident') ...[
+                                if (_scope == 'RESIDENT') ...[
                                   const Align(
                                     alignment: Alignment.centerLeft,
                                     child: Text(
@@ -1236,7 +1336,9 @@ class _SendNoticeScreenState extends State<SendNoticeScreen> {
                                         .where(
                                           'adminId',
                                           isEqualTo: FirebaseAuth
-                                              .instance.currentUser?.uid,
+                                              .instance
+                                              .currentUser
+                                              ?.uid,
                                         )
                                         .snapshots(),
                                     builder: (context, snap) {
@@ -1251,8 +1353,10 @@ class _SendNoticeScreenState extends State<SendNoticeScreen> {
                                         ),
                                         items: items.map((doc) {
                                           final data =
-                                              doc.data() as Map<String, dynamic>;
-                                          final label = data['name'] ??
+                                              doc.data()
+                                                  as Map<String, dynamic>;
+                                          final label =
+                                              data['name'] ??
                                               data['fullName'] ??
                                               data['email'] ??
                                               'Resident';
@@ -1267,13 +1371,15 @@ class _SendNoticeScreenState extends State<SendNoticeScreen> {
                                               .toList();
                                           String label = '';
                                           if (selected.isNotEmpty) {
-                                            final data = selected.first.data()
-                                                as Map<String, dynamic>;
-                                            label = (data['name'] ??
-                                                    data['fullName'] ??
-                                                    data['email'] ??
-                                                    '')
-                                                .toString();
+                                            final data =
+                                                selected.first.data()
+                                                    as Map<String, dynamic>;
+                                            label =
+                                                (data['name'] ??
+                                                        data['fullName'] ??
+                                                        data['email'] ??
+                                                        '')
+                                                    .toString();
                                           }
                                           setState(() {
                                             _selectedResidentId = value ?? '';
@@ -1284,7 +1390,7 @@ class _SendNoticeScreenState extends State<SendNoticeScreen> {
                                     },
                                   ),
                                 ],
-                                if (_audience.isNotEmpty) ...[
+                                if (_scope.isNotEmpty) ...[
                                   const SizedBox(height: 16),
                                   Container(
                                     width: double.infinity,
@@ -1298,20 +1404,21 @@ class _SendNoticeScreenState extends State<SendNoticeScreen> {
                                       ),
                                       borderRadius: BorderRadius.circular(12),
                                       border: Border.all(
-                                        color: const Color(0xFF0F766E)
-                                            .withOpacity(0.2),
+                                        color: const Color(
+                                          0xFF0F766E,
+                                        ).withOpacity(0.2),
                                       ),
                                     ),
                                     child: Text(
-                                      _audience == 'all'
-                                          ? '✓ All residents across all hostels'
-                                          : _audience == 'hostel'
-                                              ? _selectedHostelId.isEmpty
-                                                  ? 'Please select a hostel'
-                                                  : '✓ Residents in selected hostel'
-                                              : _selectedResidentId.isEmpty
-                                                  ? 'Please select a resident'
-                                                  : '✓ $_selectedResidentLabel',
+                                      _scope == 'ALL'
+                                          ? '✓ All residents across your PGs'
+                                          : _scope == 'PG'
+                                          ? _selectedPgId.isEmpty
+                                                ? 'Please select a PG'
+                                                : '✓ Residents in selected PG'
+                                          : _selectedResidentId.isEmpty
+                                          ? 'Please select a resident'
+                                          : '✓ $_selectedResidentLabel',
                                       style: const TextStyle(
                                         fontSize: 12,
                                         color: Color(0xFF0F766E),
@@ -1498,9 +1605,16 @@ class _RecentResidents extends StatelessWidget {
    OCCUPANCY BY FLOOR
 ========================================================= */
 
-class _OccupancyByFloor extends StatelessWidget {
+class _OccupancyByFloor extends StatefulWidget {
   final String adminId;
   const _OccupancyByFloor({required this.adminId});
+
+  @override
+  State<_OccupancyByFloor> createState() => _OccupancyByFloorState();
+}
+
+class _OccupancyByFloorState extends State<_OccupancyByFloor> {
+  String? _selectedPgId;
 
   @override
   Widget build(BuildContext context) {
@@ -1520,48 +1634,155 @@ class _OccupancyByFloor extends StatelessWidget {
               const Text('Occupancy by Floor', style: AppTextStyles.h3),
             ],
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 14),
           StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance
-                .collection('hostels')
-                .where('adminId', isEqualTo: adminId)
+                .collectionGroup('pgs')
+                .where('adminId', isEqualTo: widget.adminId)
                 .snapshots(),
-            builder: (context, hostelsSnap) {
-              if (!hostelsSnap.hasData) {
+            builder: (context, pgsSnap) {
+              if (!pgsSnap.hasData) {
                 return const Center(child: CircularProgressIndicator());
               }
 
-              final hostels = hostelsSnap.data!.docs;
-              if (hostels.isEmpty) {
+              final pgs = pgsSnap.data!.docs;
+              if (pgs.isEmpty) {
                 return StreamBuilder<QuerySnapshot>(
                   stream: FirebaseFirestore.instance
-                      .collection('hostels')
-                      .where('createdByAdminId', isEqualTo: adminId)
+                      .collectionGroup('pgs')
+                      .where('ownerId', isEqualTo: widget.adminId)
                       .snapshots(),
                   builder: (context, fallbackSnap) {
                     if (!fallbackSnap.hasData) {
                       return const Center(child: CircularProgressIndicator());
                     }
-                    final fallbackHostels = fallbackSnap.data!.docs;
-                    if (fallbackHostels.isEmpty) {
-                      return const Text(
-                        'No floors available',
-                        style: AppTextStyles.bodySmall,
-                      );
-                    }
-                    return _buildFloorsFromHostels(
-                      context,
-                      fallbackHostels,
-                    );
+                    return _buildPgFloorSection(fallbackSnap.data!.docs);
                   },
                 );
               }
 
-              return _buildFloorsFromHostels(context, hostels);
+              return _buildPgFloorSection(pgs);
             },
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildPgFloorSection(List<QueryDocumentSnapshot> pgs) {
+    if (pgs.isEmpty) {
+      return const Text('No floors available', style: AppTextStyles.bodySmall);
+    }
+
+    if (_selectedPgId == null || !pgs.any((pg) => pg.id == _selectedPgId)) {
+      _selectedPgId = pgs.first.id;
+    }
+
+    final selectedPg = pgs.firstWhere(
+      (pg) => pg.id == _selectedPgId,
+      orElse: () => pgs.first,
+    );
+    final pgData = selectedPg.data() as Map<String, dynamic>;
+    final pgLabel = (pgData['name'] ?? pgData['pgName'] ?? 'PG').toString();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        DropdownButtonFormField<String>(
+          value: _selectedPgId,
+          decoration: const InputDecoration(
+            border: OutlineInputBorder(),
+            labelText: 'Select PG',
+            isDense: true,
+          ),
+          items: pgs.map((pg) {
+            final data = pg.data() as Map<String, dynamic>;
+            final label = (data['name'] ?? data['pgName'] ?? 'PG').toString();
+            return DropdownMenuItem(value: pg.id, child: Text(label));
+          }).toList(),
+          onChanged: (value) {
+            setState(() => _selectedPgId = value);
+          },
+        ),
+        const SizedBox(height: 12),
+        Text(pgLabel, style: AppTextStyles.bodySmall),
+        const SizedBox(height: 12),
+        StreamBuilder<QuerySnapshot>(
+          stream: selectedPg.reference
+              .collection('floors')
+              .orderBy('floorIndex')
+              .snapshots(),
+          builder: (context, floorsSnap) {
+            if (!floorsSnap.hasData) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            final floors = floorsSnap.data!.docs;
+            if (floors.isEmpty) {
+              return const Text(
+                'No floors available',
+                style: AppTextStyles.bodySmall,
+              );
+            }
+            return Column(
+              children: floors.map((floor) {
+                final floorData = floor.data() as Map<String, dynamic>;
+                final floorNameRaw = floorData['floorName'];
+                final floorIndex = floorData['floorIndex'];
+                final floorName = (floorNameRaw ?? '').toString().trim().isEmpty
+                    ? 'Floor ${floorIndex ?? ''}'
+                    : floorNameRaw.toString();
+
+                final totalRaw = floorData['totalBeds'];
+                final availRaw = floorData['availableBeds'];
+                final total = totalRaw is int
+                    ? totalRaw
+                    : int.tryParse('$totalRaw') ?? 0;
+                final available = availRaw is int
+                    ? availRaw
+                    : int.tryParse('$availRaw') ?? 0;
+                final occupied = (total - available).clamp(0, total);
+
+                if (total == 0) {
+                  return _emptyFloorRow(context, floorName);
+                }
+
+                final percentage = (occupied / total).clamp(0.0, 1.0);
+
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(floorName, style: AppTextStyles.bodySmall),
+                          Text(
+                            '$occupied/$total',
+                            style: AppTextStyles.bodySmall,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: percentage,
+                          minHeight: 6,
+                          backgroundColor: Theme.of(context).dividerColor,
+                          valueColor: AlwaysStoppedAnimation(
+                            Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            );
+          },
+        ),
+      ],
     );
   }
 }
@@ -1962,56 +2183,6 @@ int _countPendingResidents(List<QueryDocumentSnapshot> payments) {
   return count;
 }
 
-int _totalBedsFromRooms(List<QueryDocumentSnapshot> docs) {
-  int total = 0;
-  for (final doc in docs) {
-    final data = doc.data() as Map<String, dynamic>;
-    final candidates = [
-      data['totalBeds'],
-      data['bedCount'],
-      data['beds'],
-    ];
-    for (final beds in candidates) {
-      if (beds is int) {
-        total += beds;
-        break;
-      }
-      if (beds is String) {
-        total += int.tryParse(beds) ?? 0;
-        break;
-      }
-      if (beds is List) {
-        total += beds.length;
-        break;
-      }
-    }
-  }
-  return total;
-}
-
-int _occupiedBedsFromRooms(List<QueryDocumentSnapshot> docs) {
-  int total = 0;
-  for (final doc in docs) {
-    final data = doc.data() as Map<String, dynamic>;
-    final candidates = [
-      data['occupiedBeds'],
-      data['allocatedBeds'],
-      data['filledBeds'],
-    ];
-    for (final value in candidates) {
-      if (value is int) {
-        total += value;
-        break;
-      }
-      if (value is String) {
-        total += int.tryParse(value) ?? 0;
-        break;
-      }
-    }
-  }
-  return total;
-}
-
 Widget _emptyFloorRow(BuildContext context, String floorName) {
   return Padding(
     padding: const EdgeInsets.only(bottom: 16),
@@ -2033,129 +2204,6 @@ Widget _emptyFloorRow(BuildContext context, String floorName) {
         ),
       ],
     ),
-  );
-}
-
-Widget _buildFloorsFromHostels(
-  BuildContext context,
-  List<QueryDocumentSnapshot> hostels,
-) {
-  return Column(
-    children: hostels.map((hostel) {
-      final hostelId = hostel.id;
-      final floorsStream = FirebaseFirestore.instance
-          .collection('hostels')
-          .doc(hostelId)
-          .collection('floors')
-          .snapshots();
-
-      return StreamBuilder<QuerySnapshot>(
-        stream: floorsStream,
-        builder: (context, floorsSnap) {
-          if (!floorsSnap.hasData) {
-            return const SizedBox.shrink();
-          }
-
-          final floors = floorsSnap.data!.docs;
-          if (floors.isEmpty) {
-            return const SizedBox.shrink();
-          }
-
-          return Column(
-            children: floors.map((floor) {
-              final floorId = floor.id;
-              final floorData = floor.data() as Map<String, dynamic>;
-              final floorNameRaw = floorData['floorName'];
-              final floorIndex = floorData['floorIndex'];
-              final floorName = (floorNameRaw ?? '').toString().trim().isEmpty
-                  ? 'Floor ${floorIndex ?? ''}'
-                  : floorNameRaw.toString();
-
-              final roomsStream = FirebaseFirestore.instance
-                  .collection('hostels')
-                  .doc(hostelId)
-                  .collection('floors')
-                  .doc(floorId)
-                  .collection('rooms')
-                  .snapshots();
-
-              return StreamBuilder<QuerySnapshot>(
-                stream: roomsStream,
-                builder: (context, roomsSnap) {
-                  if (!roomsSnap.hasData) {
-                    return _emptyFloorRow(context, floorName);
-                  }
-
-                  final rooms = roomsSnap.data!.docs;
-                  int totalBeds = 0;
-                  int occupiedBeds = 0;
-                  for (final room in rooms) {
-                    final data = room.data() as Map<String, dynamic>;
-                    final tb = data['totalBeds'] ??
-                        data['bedCount'] ??
-                        data['beds'];
-                    if (tb is int) {
-                      totalBeds += tb;
-                    } else if (tb is String) {
-                      totalBeds += int.tryParse(tb) ?? 0;
-                    } else if (tb is List) {
-                      totalBeds += tb.length;
-                    }
-
-                    final ob = data['occupiedBeds'] ??
-                        data['allocatedBeds'] ??
-                        data['filledBeds'];
-                    if (ob is int) {
-                      occupiedBeds += ob;
-                    } else if (ob is String) {
-                      occupiedBeds += int.tryParse(ob) ?? 0;
-                    }
-                  }
-
-                  if (totalBeds == 0) {
-                    return _emptyFloorRow(context, floorName);
-                  }
-
-                  final percentage =
-                      (occupiedBeds / totalBeds).clamp(0.0, 1.0);
-
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(floorName, style: AppTextStyles.bodySmall),
-                            Text(
-                              '$occupiedBeds/$totalBeds',
-                              style: AppTextStyles.bodySmall,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: LinearProgressIndicator(
-                            value: percentage,
-                            minHeight: 6,
-                            backgroundColor: Theme.of(context).dividerColor,
-                            valueColor: AlwaysStoppedAnimation(
-                              Theme.of(context).colorScheme.primary,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              );
-            }).toList(),
-          );
-        },
-      );
-    }).toList(),
   );
 }
 

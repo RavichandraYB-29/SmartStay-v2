@@ -52,22 +52,35 @@ class _AddHostelDialogState extends State<AddHostelDialog> {
         'totalRooms': 0,
         'occupiedRooms': 0,
         'totalBeds': 0,
-        'occupiedBeds': 0,
+        'availableBeds': 0,
         'createdAt': FieldValue.serverTimestamp(),
       });
 
       final batch = FirebaseFirestore.instance.batch();
+      final pgRef = hostelRef.collection('pgs').doc();
+      batch.set(pgRef, {
+        'name': _nameController.text.trim(),
+        'pgName': _nameController.text.trim(),
+        'adminId': widget.adminId,
+        'ownerId': widget.adminId,
+        'hostelId': hostelRef.id,
+        'floors': floors,
+        'totalBeds': 0,
+        'availableBeds': 0,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
 
       for (int i = 0; i < floors; i++) {
-        batch.set(hostelRef.collection('floors').doc(), {
+        batch.set(pgRef.collection('floors').doc(), {
           'name': 'Floor ${i + 1}',
           'floorIndex': i,
           'adminId': widget.adminId,
           'totalRooms': 0,
-          'occupiedRooms': 0,
           'totalBeds': 0,
-          'occupiedBeds': 0,
+          'availableBeds': 0,
           'createdAt': FieldValue.serverTimestamp(),
+          'hostelId': hostelRef.id,
+          'pgId': pgRef.id,
         });
       }
 

@@ -15,17 +15,25 @@ class AllocationService {
     required String adminId,
     required String residentId,
     required String hostelId,
+    required String pgId,
     required String floorId,
     required String roomId,
     required String bedId,
   }) async {
     final residentRef = _db.collection('residents').doc(residentId);
     final hostelRef = _db.collection('hostels').doc(hostelId);
-    final floorRef = hostelRef.collection('floors').doc(floorId);
+    final pgRef = hostelRef.collection('pgs').doc(pgId);
+    final floorRef = pgRef.collection('floors').doc(floorId);
     final roomRef = floorRef.collection('rooms').doc(roomId);
     final bedRef = roomRef.collection('beds').doc(bedId);
 
     await _db.runTransaction((tx) async {
+      int toInt(dynamic value) {
+        if (value is int) return value;
+        if (value is String) return int.tryParse(value) ?? 0;
+        return 0;
+      }
+
       final residentSnap = await tx.get(residentRef);
       if (!residentSnap.exists) throw Exception('Resident does not exist');
       final resident = residentSnap.data() as Map<String, dynamic>;
@@ -40,6 +48,7 @@ class AllocationService {
 
       final prevHostelId = (resident['hostelId'] ?? alloc['hostelId'])
           ?.toString();
+      final prevPgId = (resident['pgId'] ?? alloc['pgId'])?.toString();
       final prevFloorId = (resident['floorId'] ?? alloc['floorId'])?.toString();
       final prevRoomId = (resident['roomId'] ?? alloc['roomId'])?.toString();
       final prevBedId =
@@ -60,6 +69,10 @@ class AllocationService {
       if (hostelAdmin != adminId && hostelOwner != adminId) {
         throw Exception('Missing or insufficient permissions.');
       }
+
+      final pgSnap = await tx.get(pgRef);
+      if (!pgSnap.exists) throw Exception('PG does not exist');
+      final pg = pgSnap.data() as Map<String, dynamic>;
 
       final floorSnap = await tx.get(floorRef);
       if (!floorSnap.exists) throw Exception('Floor does not exist');
@@ -92,12 +105,15 @@ class AllocationService {
 
       if (prevAllocated && (changingRoom || changingBed)) {
         if (prevHostelId != null &&
+            prevPgId != null &&
             prevFloorId != null &&
             prevRoomId != null &&
             prevBedId != null) {
           final prevBedRef = _db
               .collection('hostels')
               .doc(prevHostelId)
+              .collection('pgs')
+              .doc(prevPgId)
               .collection('floors')
               .doc(prevFloorId)
               .collection('rooms')
@@ -118,11 +134,13 @@ class AllocationService {
             }
           }
 
-          // decrement old room occupiedBeds only if changing rooms
+          // decrement old room counters only if changing rooms
           if (changingRoom) {
             final prevRoomRef = _db
                 .collection('hostels')
                 .doc(prevHostelId)
+                .collection('pgs')
+                .doc(prevPgId)
                 .collection('floors')
                 .doc(prevFloorId)
                 .collection('rooms')
@@ -130,11 +148,50 @@ class AllocationService {
             final prevRoomSnap = await tx.get(prevRoomRef);
             if (prevRoomSnap.exists) {
               final prevRoom = prevRoomSnap.data() as Map<String, dynamic>;
-              final ob = (prevRoom['occupiedBeds'] ?? 0) is int
-                  ? (prevRoom['occupiedBeds'] ?? 0) as int
-                  : int.tryParse('${prevRoom['occupiedBeds']}') ?? 0;
+              final prevTotal = toInt(prevRoom['totalBeds']);
+              final prevOcc = toInt(prevRoom['occupiedBeds']);
+              final prevAvail = prevRoom.containsKey('availableBeds')
+                  ? toInt(prevRoom['availableBeds'])
+                  : (prevTotal - prevOcc);
               tx.update(prevRoomRef, {
-                'occupiedBeds': (ob - 1).clamp(0, 1 << 30),
+                'occupiedBeds': (prevOcc - 1).clamp(0, 1 << 30),
+                'availableBeds': (prevAvail + 1).clamp(0, prevTotal),
+              });
+            }
+
+            final prevFloorRef = _db
+                .collection('hostels')
+                .doc(prevHostelId)
+                .collection('pgs')
+                .doc(prevPgId)
+                .collection('floors')
+                .doc(prevFloorId);
+            final prevFloorSnap = await tx.get(prevFloorRef);
+            if (prevFloorSnap.exists) {
+              final prevFloor = prevFloorSnap.data() as Map<String, dynamic>;
+              final prevTotal = toInt(prevFloor['totalBeds']);
+              final prevAvail = prevFloor.containsKey('availableBeds')
+                  ? toInt(prevFloor['availableBeds'])
+                  : prevTotal;
+              tx.update(prevFloorRef, {
+                'availableBeds': (prevAvail + 1).clamp(0, prevTotal),
+              });
+            }
+
+            final prevPgRef = _db
+                .collection('hostels')
+                .doc(prevHostelId)
+                .collection('pgs')
+                .doc(prevPgId);
+            final prevPgSnap = await tx.get(prevPgRef);
+            if (prevPgSnap.exists) {
+              final prevPg = prevPgSnap.data() as Map<String, dynamic>;
+              final prevTotal = toInt(prevPg['totalBeds']);
+              final prevAvail = prevPg.containsKey('availableBeds')
+                  ? toInt(prevPg['availableBeds'])
+                  : prevTotal;
+              tx.update(prevPgRef, {
+                'availableBeds': (prevAvail + 1).clamp(0, prevTotal),
               });
             }
           }
@@ -148,14 +205,33 @@ class AllocationService {
         'occupiedBy': residentId,
       });
 
-      // increment new room occupiedBeds when:
+      // increment new room counters when:
       // - previously unallocated, OR
       // - moved from different room
       if (!prevAllocated || changingRoom) {
-        final ob = (room['occupiedBeds'] ?? 0) is int
-            ? (room['occupiedBeds'] ?? 0) as int
-            : int.tryParse('${room['occupiedBeds']}') ?? 0;
-        tx.update(roomRef, {'occupiedBeds': (ob + 1)});
+        final total = toInt(room['totalBeds']);
+        final occ = toInt(room['occupiedBeds']);
+        final avail = room.containsKey('availableBeds')
+            ? toInt(room['availableBeds'])
+            : (total - occ);
+        tx.update(roomRef, {
+          'occupiedBeds': occ + 1,
+          'availableBeds': (avail - 1).clamp(0, total),
+        });
+
+        final floorTotal = toInt(floor['totalBeds']);
+        final floorAvail = floor.containsKey('availableBeds')
+            ? toInt(floor['availableBeds'])
+            : floorTotal;
+        tx.update(floorRef, {
+          'availableBeds': (floorAvail - 1).clamp(0, floorTotal),
+        });
+
+        final pgTotal = toInt(pg['totalBeds']);
+        final pgAvail = pg.containsKey('availableBeds')
+            ? toInt(pg['availableBeds'])
+            : pgTotal;
+        tx.update(pgRef, {'availableBeds': (pgAvail - 1).clamp(0, pgTotal)});
       }
 
       final hostelName = (hostel['name'] ?? '').toString();
@@ -167,6 +243,7 @@ class AllocationService {
         'isAllocated': true,
         'allocationStatus': 'active',
         'hostelId': hostelId,
+        'pgId': pgId,
         'floorId': floorId,
         'roomId': roomId,
         'bedId': bedId,
@@ -175,6 +252,7 @@ class AllocationService {
         'allocatedAt': FieldValue.serverTimestamp(),
         'allocationDetails': {
           'hostelId': hostelId,
+          'pgId': pgId,
           'hostelName': hostelName,
           'floorId': floorId,
           'floorName': floorName,
@@ -193,6 +271,7 @@ class AllocationService {
   static Future<void> allocateResidentToBed({
     required String residentId,
     required String hostelId,
+    required String pgId,
     required String floorId,
     required String roomId,
     required String bedId,
@@ -203,6 +282,8 @@ class AllocationService {
     final bedRef = _db
         .collection('hostels')
         .doc(hostelId)
+        .collection('pgs')
+        .doc(pgId)
         .collection('floors')
         .doc(floorId)
         .collection('rooms')
@@ -211,6 +292,12 @@ class AllocationService {
         .doc(bedId);
 
     await _db.runTransaction((tx) async {
+      int toInt(dynamic value) {
+        if (value is int) return value;
+        if (value is String) return int.tryParse(value) ?? 0;
+        return 0;
+      }
+
       final bedSnapshot = await tx.get(bedRef);
       if (!bedSnapshot.exists) throw Exception('Bed does not exist');
       final bedData = bedSnapshot.data() as Map<String, dynamic>;
@@ -229,18 +316,231 @@ class AllocationService {
         'occupiedBy': residentId,
         'residentId': residentId,
       });
+
+      final roomRef = _db
+          .collection('hostels')
+          .doc(hostelId)
+          .collection('pgs')
+          .doc(pgId)
+          .collection('floors')
+          .doc(floorId)
+          .collection('rooms')
+          .doc(roomId);
+      final floorRef = _db
+          .collection('hostels')
+          .doc(hostelId)
+          .collection('pgs')
+          .doc(pgId)
+          .collection('floors')
+          .doc(floorId);
+      final pgRef = _db
+          .collection('hostels')
+          .doc(hostelId)
+          .collection('pgs')
+          .doc(pgId);
+
+      final roomSnap = await tx.get(roomRef);
+      final floorSnap = await tx.get(floorRef);
+      final pgSnap = await tx.get(pgRef);
+
+      if (roomSnap.exists) {
+        final room = roomSnap.data() as Map<String, dynamic>;
+        final total = toInt(room['totalBeds']);
+        final occ = toInt(room['occupiedBeds']);
+        final avail = room.containsKey('availableBeds')
+            ? toInt(room['availableBeds'])
+            : (total - occ);
+        tx.update(roomRef, {
+          'occupiedBeds': occ + 1,
+          'availableBeds': (avail - 1).clamp(0, total),
+        });
+      }
+
+      if (floorSnap.exists) {
+        final floor = floorSnap.data() as Map<String, dynamic>;
+        final total = toInt(floor['totalBeds']);
+        final avail = floor.containsKey('availableBeds')
+            ? toInt(floor['availableBeds'])
+            : total;
+        tx.update(floorRef, {'availableBeds': (avail - 1).clamp(0, total)});
+      }
+
+      if (pgSnap.exists) {
+        final pg = pgSnap.data() as Map<String, dynamic>;
+        final total = toInt(pg['totalBeds']);
+        final avail = pg.containsKey('availableBeds')
+            ? toInt(pg['availableBeds'])
+            : total;
+        tx.update(pgRef, {'availableBeds': (avail - 1).clamp(0, total)});
+      }
+
       tx.update(residentRef, {
         'isAllocated': true,
         'hostelId': hostelId,
+        'pgId': pgId,
         'floorId': floorId,
         'roomId': roomId,
         'bedSlot': bedId,
         'allocationDetails': {
           'hostelId': hostelId,
+          'pgId': pgId,
           'floorId': floorId,
           'roomId': roomId,
           'bedSlot': bedId,
         },
+      });
+    });
+  }
+
+  /// Deallocate a resident and free their bed (ADMIN ONLY).
+  static Future<void> deallocateResident({
+    required String adminId,
+    required String residentId,
+  }) async {
+    final residentRef = _db.collection('residents').doc(residentId);
+
+    await _db.runTransaction((tx) async {
+      int toInt(dynamic value) {
+        if (value is int) return value;
+        if (value is String) return int.tryParse(value) ?? 0;
+        return 0;
+      }
+
+      final residentSnap = await tx.get(residentRef);
+      if (!residentSnap.exists) throw Exception('Resident does not exist');
+      final resident = residentSnap.data() as Map<String, dynamic>;
+
+      if (resident['adminId']?.toString() != adminId) {
+        throw Exception('Missing or insufficient permissions.');
+      }
+
+      if (resident['isAllocated'] != true) {
+        tx.update(residentRef, {
+          'isAllocated': false,
+          'allocationStatus': 'inactive',
+          'allocationDetails': null,
+        });
+        return;
+      }
+
+      final alloc = resident['allocationDetails'] is Map<String, dynamic>
+          ? (resident['allocationDetails'] as Map<String, dynamic>)
+          : <String, dynamic>{};
+
+      final hostelId = (resident['hostelId'] ?? alloc['hostelId'])?.toString();
+      final pgId = (resident['pgId'] ?? alloc['pgId'])?.toString();
+      final floorId = (resident['floorId'] ?? alloc['floorId'])?.toString();
+      final roomId = (resident['roomId'] ?? alloc['roomId'])?.toString();
+      final bedId =
+          (resident['bedId'] ??
+                  resident['bedSlot'] ??
+                  alloc['bedId'] ??
+                  alloc['bedSlot'])
+              ?.toString();
+
+      if (hostelId == null ||
+          pgId == null ||
+          floorId == null ||
+          roomId == null ||
+          bedId == null) {
+        tx.update(residentRef, {
+          'isAllocated': false,
+          'allocationStatus': 'inactive',
+          'allocationDetails': null,
+        });
+        return;
+      }
+
+      final bedRef = _db
+          .collection('hostels')
+          .doc(hostelId)
+          .collection('pgs')
+          .doc(pgId)
+          .collection('floors')
+          .doc(floorId)
+          .collection('rooms')
+          .doc(roomId)
+          .collection('beds')
+          .doc(bedId);
+      final roomRef = _db
+          .collection('hostels')
+          .doc(hostelId)
+          .collection('pgs')
+          .doc(pgId)
+          .collection('floors')
+          .doc(floorId)
+          .collection('rooms')
+          .doc(roomId);
+      final floorRef = _db
+          .collection('hostels')
+          .doc(hostelId)
+          .collection('pgs')
+          .doc(pgId)
+          .collection('floors')
+          .doc(floorId);
+      final pgRef = _db
+          .collection('hostels')
+          .doc(hostelId)
+          .collection('pgs')
+          .doc(pgId);
+
+      final bedSnap = await tx.get(bedRef);
+      if (bedSnap.exists) {
+        final bed = bedSnap.data() as Map<String, dynamic>;
+        final occupiedBy = (bed['residentId'] ?? bed['occupiedBy'])?.toString();
+        if (bed['isOccupied'] == true && occupiedBy == residentId) {
+          tx.update(bedRef, {
+            'isOccupied': false,
+            'residentId': null,
+            'occupiedBy': null,
+          });
+        }
+      }
+
+      final roomSnap = await tx.get(roomRef);
+      if (roomSnap.exists) {
+        final room = roomSnap.data() as Map<String, dynamic>;
+        final total = toInt(room['totalBeds']);
+        final occ = toInt(room['occupiedBeds']);
+        final avail = room.containsKey('availableBeds')
+            ? toInt(room['availableBeds'])
+            : (total - occ);
+        tx.update(roomRef, {
+          'occupiedBeds': (occ - 1).clamp(0, 1 << 30),
+          'availableBeds': (avail + 1).clamp(0, total),
+        });
+      }
+
+      final floorSnap = await tx.get(floorRef);
+      if (floorSnap.exists) {
+        final floor = floorSnap.data() as Map<String, dynamic>;
+        final total = toInt(floor['totalBeds']);
+        final avail = floor.containsKey('availableBeds')
+            ? toInt(floor['availableBeds'])
+            : total;
+        tx.update(floorRef, {'availableBeds': (avail + 1).clamp(0, total)});
+      }
+
+      final pgSnap = await tx.get(pgRef);
+      if (pgSnap.exists) {
+        final pg = pgSnap.data() as Map<String, dynamic>;
+        final total = toInt(pg['totalBeds']);
+        final avail = pg.containsKey('availableBeds')
+            ? toInt(pg['availableBeds'])
+            : total;
+        tx.update(pgRef, {'availableBeds': (avail + 1).clamp(0, total)});
+      }
+
+      tx.update(residentRef, {
+        'isAllocated': false,
+        'allocationStatus': 'inactive',
+        'hostelId': null,
+        'pgId': null,
+        'floorId': null,
+        'roomId': null,
+        'bedId': null,
+        'bedSlot': null,
+        'allocationDetails': null,
       });
     });
   }

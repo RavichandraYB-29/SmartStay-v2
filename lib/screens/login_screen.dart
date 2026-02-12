@@ -742,7 +742,7 @@ class _LoginScreenState extends State<LoginScreen> {
         GradientButton(
           text: 'Sign In',
           isLoading: isLoading,
-          onPressed: _canLogin ? loginUser : null,
+          onPressed: isLoading ? null : loginUser,
         ),
         const SizedBox(height: 16),
         OutlinedButton(

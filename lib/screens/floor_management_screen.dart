@@ -6,13 +6,17 @@ import 'room_management_screen.dart';
 
 class FloorManagementScreen extends StatelessWidget {
   final String hostelId;
+  final String pgId;
   final String hostelName;
+  final String pgName;
   final String adminId;
 
   const FloorManagementScreen({
     super.key,
     required this.hostelId,
+    required this.pgId,
     required this.hostelName,
+    required this.pgName,
     required this.adminId,
   });
 
@@ -26,6 +30,8 @@ class FloorManagementScreen extends StatelessWidget {
         stream: FirebaseFirestore.instance
             .collection('hostels')
             .doc(hostelId)
+            .collection('pgs')
+            .doc(pgId)
             .collection('floors')
             .orderBy('floorIndex')
             .snapshots(),
@@ -148,6 +154,8 @@ class FloorManagementScreen extends StatelessWidget {
         final roomsSnap = await FirebaseFirestore.instance
             .collection('hostels')
             .doc(hostelId)
+            .collection('pgs')
+            .doc(pgId)
             .collection('floors')
             .doc(floor.id)
             .collection('rooms')
@@ -159,9 +167,11 @@ class FloorManagementScreen extends StatelessWidget {
         int ob = 0;
 
         for (final r in roomsSnap.docs) {
-          final d = r.data() as Map<String, dynamic>;
-          final int beds = (d['totalBeds'] ?? 0) as int;
-          final int occ = (d['occupiedBeds'] ?? 0) as int;
+          final d = r.data();
+          final bedsRaw = d['totalBeds'];
+          final occRaw = d['occupiedBeds'];
+          final beds = bedsRaw is int ? bedsRaw : int.tryParse('$bedsRaw') ?? 0;
+          final occ = occRaw is int ? occRaw : int.tryParse('$occRaw') ?? 0;
 
           tb += beds;
           ob += occ;
@@ -209,7 +219,7 @@ class FloorManagementScreen extends StatelessWidget {
                 fontWeight: FontWeight.bold,
               ),
             ),
-            Text(hostelName, style: theme.textTheme.bodySmall),
+            Text('$hostelName • $pgName', style: theme.textTheme.bodySmall),
           ],
         ),
         const Spacer(),
@@ -227,7 +237,8 @@ class FloorManagementScreen extends StatelessWidget {
         showDialog(
           context: context,
           barrierDismissible: false,
-          builder: (_) => AddFloorDialog(hostelId: hostelId, adminId: adminId),
+          builder: (_) =>
+              AddFloorDialog(hostelId: hostelId, pgId: pgId, adminId: adminId),
         );
       },
       child: Container(
@@ -338,8 +349,6 @@ class FloorManagementScreen extends StatelessWidget {
   }
 
   Widget _statsCards(BuildContext context, int tr, int or, int tb, int ob) {
-    final theme = Theme.of(context);
-
     return Row(
       children: [
         _statCard(context, 'Total Rooms', '$tr'),
@@ -416,6 +425,7 @@ class FloorManagementScreen extends StatelessWidget {
                 MaterialPageRoute(
                   builder: (_) => RoomManagementScreen(
                     hostelId: hostelId,
+                    pgId: pgId,
                     floorId: floorId,
                     adminId: adminId,
                   ),

@@ -1,0 +1,8 @@
+{
+  "name": "smartstay-migrations",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "firebase-admin": "latest"
+  }
+}

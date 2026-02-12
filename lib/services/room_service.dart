@@ -7,12 +7,15 @@ class RoomService {
   /// Returns: totalBeds, occupiedBeds, freeBeds
   static Future<Map<String, int>> getRoomCapacity({
     required String hostelId,
+    required String pgId,
     required String floorId,
     required String roomId,
   }) async {
     final bedsSnapshot = await _db
         .collection('hostels')
         .doc(hostelId)
+        .collection('pgs')
+        .doc(pgId)
         .collection('floors')
         .doc(floorId)
         .collection('rooms')
@@ -24,7 +27,7 @@ class RoomService {
     int occupiedBeds = 0;
 
     for (final doc in bedsSnapshot.docs) {
-      if (doc.data()['occupied'] == true) {
+      if (doc.data()['isOccupied'] == true) {
         occupiedBeds++;
       }
     }
@@ -41,18 +44,21 @@ class RoomService {
   /// Get list of FREE beds only
   static Future<List<QueryDocumentSnapshot>> getFreeBeds({
     required String hostelId,
+    required String pgId,
     required String floorId,
     required String roomId,
   }) async {
     final freeBedsSnapshot = await _db
         .collection('hostels')
         .doc(hostelId)
+        .collection('pgs')
+        .doc(pgId)
         .collection('floors')
         .doc(floorId)
         .collection('rooms')
         .doc(roomId)
         .collection('beds')
-        .where('occupied', isEqualTo: false)
+        .where('isOccupied', isEqualTo: false)
         .get();
 
     return freeBedsSnapshot.docs;

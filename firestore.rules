@@ -86,7 +86,7 @@ service cloud.firestore {
 
     /* ───────── ASSIGNMENT HELPERS ───────── */
 
-    function isAssignedToHostel(hostelId) {
+    function isAssignedToPg(hostelId, pgId) {
       return isResident()
         && hasResidentRecord()
         && residentDocForUser().data.isAllocated == true
@@ -94,10 +94,15 @@ service cloud.firestore {
           (residentDocForUser().data.allocationDetails != null
             ? residentDocForUser().data.allocationDetails.hostelId
             : residentDocForUser().data.hostelId) == hostelId
-        );
+        )
+        && (
+          (residentDocForUser().data.allocationDetails != null
+            ? residentDocForUser().data.allocationDetails.pgId
+            : residentDocForUser().data.pgId) == pgId
+        )
     }
 
-    function isAssignedToRoom(hostelId, floorId, roomId) {
+    function isAssignedToRoom(hostelId, pgId, floorId, roomId) {
       return isResident()
         && hasResidentRecord()
         && residentDocForUser().data.isAllocated == true
@@ -105,6 +110,11 @@ service cloud.firestore {
           (residentDocForUser().data.allocationDetails != null
             ? residentDocForUser().data.allocationDetails.hostelId
             : residentDocForUser().data.hostelId) == hostelId
+        )
+        && (
+          (residentDocForUser().data.allocationDetails != null
+            ? residentDocForUser().data.allocationDetails.pgId
+            : residentDocForUser().data.pgId) == pgId
         )
         && (
           (residentDocForUser().data.allocationDetails != null
@@ -162,33 +172,40 @@ service cloud.firestore {
 
       allow update, delete: if isAdminOwner(resource.data);
 
-      match /floors/{floorId} {
+      match /pgs/{pgId} {
         allow create, update, delete: if isHostelAdmin(hostelId);
 
         allow read: if isAdmin()
           || isHostelOwner(hostelId)
-          || isAssignedToHostel(hostelId);
+          || isAssignedToPg(hostelId, pgId);
 
-        match /rooms/{roomId} {
+        match /floors/{floorId} {
           allow create, update, delete: if isHostelAdmin(hostelId);
 
-          // 🔑 THIS ENABLES collectionGroup('rooms')
           allow read: if isAdmin()
             || isHostelOwner(hostelId)
-            || isAssignedToRoom(hostelId, floorId, roomId);
+            || isAssignedToPg(hostelId, pgId);
 
-          match /beds/{bedId} {
-            allow create: if isHostelAdmin(hostelId);
-
-            allow update: if isHostelAdmin(hostelId)
-              && request.resource.data.diff(resource.data).changedKeys()
-                .hasOnly(['isOccupied', 'occupiedBy', 'residentId']);
-
-            allow delete: if isHostelAdmin(hostelId);
+          match /rooms/{roomId} {
+            allow create, update, delete: if isHostelAdmin(hostelId);
 
             allow read: if isAdmin()
               || isHostelOwner(hostelId)
-              || isAssignedToRoom(hostelId, floorId, roomId);
+              || isAssignedToRoom(hostelId, pgId, floorId, roomId);
+
+            match /beds/{bedId} {
+              allow create: if isHostelAdmin(hostelId);
+
+              allow update: if isHostelAdmin(hostelId)
+                && request.resource.data.diff(resource.data).changedKeys()
+                  .hasOnly(['isOccupied', 'occupiedBy', 'residentId']);
+
+              allow delete: if isHostelAdmin(hostelId);
+
+              allow read: if isAdmin()
+                || isHostelOwner(hostelId)
+                || isAssignedToRoom(hostelId, pgId, floorId, roomId);
+            }
           }
         }
       }
@@ -255,9 +272,12 @@ service cloud.firestore {
       allow create: if isAdmin()
         && request.resource.data.createdByAdminId == request.auth.uid
         && request.resource.data.title is string
-        && request.resource.data.description is string
+        && request.resource.data.message is string
         && request.resource.data.noticeType is string
-        && request.resource.data.audienceType in ['all', 'hostel', 'resident'];
+        && request.resource.data.scope in ['ALL', 'PG', 'RESIDENT']
+        && request.resource.data.pgIds is list
+        && request.resource.data.residentIds is list
+        && request.resource.data.isActive is bool;
 
       allow update, delete: if isAdmin()
         && resource.data.createdByAdminId == request.auth.uid;
@@ -266,19 +286,28 @@ service cloud.firestore {
         || (
           hasResidentRecord()
           && (
-            resource.data.audienceType == 'all'
-            || (
-              resource.data.audienceType == 'hostel'
-              && (
+            resource.data.isActive == true
+            && (
+              resource.data.scope == 'ALL'
+              && resource.data.pgIds.hasAny([
                 (residentDocForUser().data.allocationDetails != null
-                  ? residentDocForUser().data.allocationDetails.hostelId
-                  : residentDocForUser().data.hostelId
-                ) == resource.data.hostelId
-              )
+                  ? residentDocForUser().data.allocationDetails.pgId
+                  : residentDocForUser().data.pgId
+                )
+              ])
             )
             || (
-              resource.data.audienceType == 'resident'
-              && resource.data.residentId == userDoc().data.residentId
+              resource.data.scope == 'PG'
+              && resource.data.pgIds.hasAny([
+                (residentDocForUser().data.allocationDetails != null
+                  ? residentDocForUser().data.allocationDetails.pgId
+                  : residentDocForUser().data.pgId
+                )
+              ])
+            )
+            || (
+              resource.data.scope == 'RESIDENT'
+              && resource.data.residentIds.hasAny([userDoc().data.residentId])
             )
           )
         );

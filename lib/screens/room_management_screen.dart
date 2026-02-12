@@ -4,12 +4,14 @@ import 'add_room_dialog.dart';
 
 class RoomManagementScreen extends StatelessWidget {
   final String hostelId;
+  final String pgId;
   final String floorId;
   final String adminId;
 
   const RoomManagementScreen({
     super.key,
     required this.hostelId,
+    required this.pgId,
     required this.floorId,
     required this.adminId,
   });
@@ -24,6 +26,8 @@ class RoomManagementScreen extends StatelessWidget {
         stream: FirebaseFirestore.instance
             .collection('hostels')
             .doc(hostelId)
+            .collection('pgs')
+            .doc(pgId)
             .collection('floors')
             .doc(floorId)
             .collection('rooms')
@@ -116,6 +120,7 @@ class RoomManagementScreen extends StatelessWidget {
               barrierDismissible: false,
               builder: (_) => AddRoomDialog(
                 hostelId: hostelId,
+                pgId: pgId,
                 floorId: floorId,
                 adminId: adminId,
               ),
@@ -168,6 +173,7 @@ class RoomManagementScreen extends StatelessWidget {
               child: _RoomCard(
                 context,
                 hostelId: hostelId,
+                pgId: pgId,
                 floorId: floorId,
                 roomId: doc.id,
                 roomNo: data['roomNumber'].toString(),
@@ -188,6 +194,7 @@ class RoomManagementScreen extends StatelessWidget {
   Widget _RoomCard(
     BuildContext context, {
     required String hostelId,
+    required String pgId,
     required String floorId,
     required String roomId,
     required String roomNo,
@@ -301,6 +308,7 @@ class RoomManagementScreen extends StatelessWidget {
             stream: FirebaseFirestore.instance
                 .collection('residents')
                 .where('hostelId', isEqualTo: hostelId)
+                .where('pgId', isEqualTo: pgId)
                 .where('floorId', isEqualTo: floorId)
                 .where('roomId', isEqualTo: roomId)
                 .where('adminId', isEqualTo: adminId)

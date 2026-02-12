@@ -4,12 +4,14 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 class AddRoomDialog extends StatefulWidget {
   final String hostelId;
+  final String pgId;
   final String floorId;
   final String adminId;
 
   const AddRoomDialog({
     super.key,
     required this.hostelId,
+    required this.pgId,
     required this.floorId,
     required this.adminId,
   });
@@ -308,25 +310,34 @@ class _AddRoomDialogState extends State<AddRoomDialog> {
       final firestore = FirebaseFirestore.instance;
       final batch = firestore.batch();
 
-      final roomRef = firestore
-          .collection('hostels')
-          .doc(widget.hostelId)
-          .collection('floors')
-          .doc(widget.floorId)
-          .collection('rooms')
-          .doc();
+      final hostelRef = firestore.collection('hostels').doc(widget.hostelId);
+      final pgRef = hostelRef.collection('pgs').doc(widget.pgId);
+      final floorRef = pgRef.collection('floors').doc(widget.floorId);
+      final roomRef = floorRef.collection('rooms').doc();
 
       batch.set(roomRef, {
         'adminId': widget.adminId,
         'hostelId': widget.hostelId,
+        'pgId': widget.pgId,
         'floorId': widget.floorId,
         'roomNumber': _roomNoController.text.trim(),
         'name': 'Room ${_roomNoController.text.trim()}',
         'sharingType': _sharingType,
         'totalBeds': totalBeds,
+        'availableBeds': totalBeds,
         'occupiedBeds': 0,
         'rentPerBed': rent,
         'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      batch.update(floorRef, {
+        'totalRooms': FieldValue.increment(1),
+        'totalBeds': FieldValue.increment(totalBeds),
+        'availableBeds': FieldValue.increment(totalBeds),
+      });
+      batch.update(pgRef, {
+        'totalBeds': FieldValue.increment(totalBeds),
+        'availableBeds': FieldValue.increment(totalBeds),
       });
 
       for (int i = 1; i <= totalBeds; i++) {

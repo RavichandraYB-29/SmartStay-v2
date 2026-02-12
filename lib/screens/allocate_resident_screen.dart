@@ -21,10 +21,12 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
   QueryDocumentSnapshot<Map<String, dynamic>>? _selectedResident;
 
   String? _hostelId;
+  String? _pgId;
   String? _floorId;
   String? _roomId;
   String? _bedId;
   String? _hostelName;
+  String? _pgName;
   String? _floorName;
   String? _roomNumber;
   String? _bedNumber;
@@ -60,11 +62,14 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
 
   Future<void> _bootstrapBedsForSelectedRoom() async {
     final hostelId = _hostelId;
+    final pgId = _pgId;
     final floorId = _floorId;
     final roomId = _roomId;
-    if (hostelId == null || floorId == null || roomId == null) return;
+    if (hostelId == null || pgId == null || floorId == null || roomId == null) {
+      return;
+    }
 
-    final key = '$hostelId/$floorId/$roomId';
+    final key = '$hostelId/$pgId/$floorId/$roomId';
     if (_bootstrappedBedsForRooms.contains(key) || _bootstrappingBeds) return;
 
     setState(() => _bootstrappingBeds = true);
@@ -72,6 +77,8 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
       final roomRef = FirebaseFirestore.instance
           .collection('hostels')
           .doc(hostelId)
+          .collection('pgs')
+          .doc(pgId)
           .collection('floors')
           .doc(floorId)
           .collection('rooms')
@@ -157,6 +164,11 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
   void _clearDownstream({required String level}) {
     setState(() {
       if (level == 'hostel') {
+        _pgId = null;
+        _floorId = null;
+        _roomId = null;
+        _bedId = null;
+      } else if (level == 'pg') {
         _floorId = null;
         _roomId = null;
         _bedId = null;
@@ -172,10 +184,12 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
   void _resetAllocation() {
     setState(() {
       _hostelId = null;
+      _pgId = null;
       _floorId = null;
       _roomId = null;
       _bedId = null;
       _hostelName = null;
+      _pgName = null;
       _floorName = null;
       _roomNumber = null;
       _bedNumber = null;
@@ -190,6 +204,7 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
       _hostelId =
           (d['hostelId'] ?? (alloc is Map ? alloc['hostelId'] : null))
               as String?;
+      _pgId = (d['pgId'] ?? (alloc is Map ? alloc['pgId'] : null)) as String?;
       _floorId =
           (d['floorId'] ?? (alloc is Map ? alloc['floorId'] : null)) as String?;
       _roomId =
@@ -201,6 +216,7 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
                   (alloc is Map ? alloc['bedSlot'] : null))
               as String?;
       _hostelName = (alloc is Map ? alloc['hostelName'] : null)?.toString();
+      _pgName = (alloc is Map ? alloc['pgName'] : null)?.toString();
       _floorName = (alloc is Map ? alloc['floorName'] : null)?.toString();
       _roomNumber = (alloc is Map ? alloc['roomNumber'] : null)?.toString();
       _bedNumber = (alloc is Map ? alloc['bedNumber'] : null)?.toString();
@@ -211,12 +227,13 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
     final r = _selectedResident;
     if (r == null) return;
     if (_hostelId == null ||
+        _pgId == null ||
         _floorId == null ||
         _roomId == null ||
         _bedId == null) {
       await _dialog(
         'Incomplete Selection',
-        'Please select hostel, floor, room, and bed.',
+        'Please select hostel, PG, floor, room, and bed.',
         true,
       );
       return;
@@ -227,6 +244,7 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
         adminId: widget.adminId,
         residentId: r.id,
         hostelId: _hostelId!,
+        pgId: _pgId!,
         floorId: _floorId!,
         roomId: _roomId!,
         bedId: _bedId!,
@@ -829,7 +847,7 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _label('Hostel / PG *', Icons.business),
+                  _label('Hostel *', Icons.business),
                   DropdownButtonFormField<String>(
                     value: _hostelId,
                     isExpanded: true,
@@ -852,6 +870,7 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
                         _hostelName = v == null
                             ? null
                             : (hostelNameById[v] ?? '');
+                        _pgName = null;
                         _floorName = null;
                         _roomNumber = null;
                         _bedNumber = null;
@@ -861,6 +880,8 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
                     decoration: _ddDecoration(),
                   ),
                   const SizedBox(height: 14),
+                  _pgDropdown(),
+                  const SizedBox(height: 14),
                   _floorDropdown(),
                   const SizedBox(height: 14),
                   _roomDropdown(),
@@ -868,6 +889,7 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
                   _bedDropdown(),
                   if (_selectedResident != null &&
                       _hostelId != null &&
+                      _pgId != null &&
                       _floorId != null &&
                       _roomId != null &&
                       _bedId != null) ...[
@@ -916,6 +938,11 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
                 ? _hostelName!
                 : _hostelId!,
           ),
+          if (_pgId != null)
+            _sumLine(
+              'PG',
+              (_pgName != null && _pgName!.isNotEmpty) ? _pgName! : _pgId!,
+            ),
           _sumLine(
             'Floor',
             (_floorName != null && _floorName!.isNotEmpty)
@@ -949,14 +976,76 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
     );
   }
 
-  Widget _floorDropdown() {
+  Widget _pgDropdown() {
     if (_hostelId == null) {
-      return _disabled('Floor *', Icons.layers, 'Select hostel first');
+      return _disabled('PG *', Icons.apartment, 'Select hostel first');
     }
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
           .collection('hostels')
           .doc(_hostelId)
+          .collection('pgs')
+          .snapshots(),
+      builder: (context, snap) {
+        if (snap.hasError) {
+          debugPrint('PGS_LOAD_ERROR: ${snap.error}');
+          return _disabled('PG *', Icons.apartment, 'Unable to load PGs.');
+        }
+        if (!snap.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final pgs = snap.data!.docs;
+        final pgNameById = <String, String>{
+          for (final pg in pgs)
+            pg.id: (pg.data()['name'] ?? pg.data()['pgName'] ?? '').toString(),
+        };
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _label('PG *', Icons.apartment),
+            DropdownButtonFormField<String>(
+              value: _pgId,
+              isExpanded: true,
+              items: [
+                const DropdownMenuItem(value: null, child: Text('Select PG')),
+                ...pgs.map((pg) {
+                  final name = pgNameById[pg.id] ?? '';
+                  return DropdownMenuItem(
+                    value: pg.id,
+                    child: Text(name.isEmpty ? pg.id : name),
+                  );
+                }),
+              ],
+              onChanged: (v) {
+                setState(() {
+                  _pgId = v;
+                  _pgName = v == null ? null : (pgNameById[v] ?? '');
+                  _floorName = null;
+                  _roomNumber = null;
+                  _bedNumber = null;
+                });
+                _clearDownstream(level: 'pg');
+              },
+              decoration: _ddDecoration(),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _floorDropdown() {
+    if (_hostelId == null || _pgId == null) {
+      return _disabled('Floor *', Icons.layers, 'Select hostel & PG first');
+    }
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('hostels')
+          .doc(_hostelId)
+          .collection('pgs')
+          .doc(_pgId)
           .collection('floors')
           .where('adminId', isEqualTo: widget.adminId)
           .snapshots(),
@@ -1025,17 +1114,19 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
   }
 
   Widget _roomDropdown() {
-    if (_hostelId == null || _floorId == null) {
+    if (_hostelId == null || _pgId == null || _floorId == null) {
       return _disabled(
         'Room Number *',
         Icons.meeting_room,
-        'Select hostel & floor first',
+        'Select hostel, PG & floor first',
       );
     }
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
           .collection('hostels')
           .doc(_hostelId)
+          .collection('pgs')
+          .doc(_pgId)
           .collection('floors')
           .doc(_floorId)
           .collection('rooms')
@@ -1100,17 +1191,22 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
   }
 
   Widget _bedDropdown() {
-    if (_hostelId == null || _floorId == null || _roomId == null) {
+    if (_hostelId == null ||
+        _pgId == null ||
+        _floorId == null ||
+        _roomId == null) {
       return _disabled(
         'Bed Position *',
         Icons.bed,
-        'Select hostel, floor & room first',
+        'Select hostel, PG, floor & room first',
       );
     }
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
           .collection('hostels')
           .doc(_hostelId)
+          .collection('pgs')
+          .doc(_pgId)
           .collection('floors')
           .doc(_floorId)
           .collection('rooms')
@@ -1272,6 +1368,7 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
   Widget _actionRow() {
     final canConfirm =
         _hostelId != null &&
+        _pgId != null &&
         _floorId != null &&
         _roomId != null &&
         _bedId != null &&
@@ -1320,7 +1417,11 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
       icon: Icons.bed,
       iconColor: const Color(0xFFF97316),
       title: 'Room Capacity',
-      child: (_hostelId == null || _floorId == null || _roomId == null)
+      child:
+          (_hostelId == null ||
+              _pgId == null ||
+              _floorId == null ||
+              _roomId == null)
           ? Column(
               children: [
                 const SizedBox(height: 18),
@@ -1336,6 +1437,8 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
               stream: FirebaseFirestore.instance
                   .collection('hostels')
                   .doc(_hostelId)
+                  .collection('pgs')
+                  .doc(_pgId)
                   .collection('floors')
                   .doc(_floorId)
                   .collection('rooms')
@@ -1355,6 +1458,8 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
                   stream: FirebaseFirestore.instance
                       .collection('hostels')
                       .doc(_hostelId)
+                      .collection('pgs')
+                      .doc(_pgId)
                       .collection('floors')
                       .doc(_floorId)
                       .collection('rooms')
