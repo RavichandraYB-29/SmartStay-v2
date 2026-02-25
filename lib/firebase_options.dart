@@ -16,7 +16,7 @@ class DefaultFirebaseOptions {
       case TargetPlatform.iOS:
         throw UnsupportedError('FirebaseOptions are not configured for iOS.');
       case TargetPlatform.macOS:
-        throw UnsupportedError('FirebaseOptions are not configured for macOS.');
+        return macos;
       case TargetPlatform.windows:
         throw UnsupportedError(
           'FirebaseOptions are not configured for Windows.',
@@ -45,6 +45,15 @@ class DefaultFirebaseOptions {
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyCKPLvr2jNHI-l3o-lj-6DmqPeWV3GmO5w',
     appId: '1:335173652406:android:b884118ee5fb25f944bb17',
+    messagingSenderId: '335173652406',
+    projectId: 'smartstay-beb80',
+    storageBucket: 'smartstay-beb80.firebasestorage.app',
+  );
+
+  /// 🍎 macOS Firebase config
+  static const FirebaseOptions macos = FirebaseOptions(
+    apiKey: 'AIzaSyAjEC-OHqURNBnWljJ7FCIBUTePnSN-9QM',
+    appId: '1:335173652406:web:404f51d1e1d5d1f544bb17',
     messagingSenderId: '335173652406',
     projectId: 'smartstay-beb80',
     storageBucket: 'smartstay-beb80.firebasestorage.app',

@@ -1,757 +1,353 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-import 'add_hostel_dialog.dart';
+import '../utils/admin_design_system.dart';
+import '../widgets/admin_widgets.dart';
 import 'floor_management_screen.dart';
 
-class HostelManagementScreen extends StatelessWidget {
-  final String adminId;
 
+class HostelManagementScreen extends StatefulWidget {
+  final String adminId;
   const HostelManagementScreen({super.key, required this.adminId});
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(28),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _Header(adminId: adminId),
-            const SizedBox(height: 28),
-            _MetricsAggregator(adminId: adminId),
-            const SizedBox(height: 36),
-            Text(
-              'All Hostels',
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 20),
-            StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('hostels')
-                  .where('ownerId', isEqualTo: adminId)
-                  .snapshots(),
-              builder: (context, snap) {
-                if (snap.hasError) {
-                  return Text(
-                    'Failed to load hostels: ${snap.error}',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  );
-                }
-                if (!snap.hasData) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-
-                final hostels = snap.data!.docs;
-                if (hostels.isNotEmpty) {
-                  return _hostelGrid(hostels, adminId);
-                }
-
-                return FutureBuilder<QuerySnapshot>(
-                  future: FirebaseFirestore.instance
-                      .collection('hostels')
-                      .where('adminId', isEqualTo: adminId)
-                      .get(),
-                  builder: (context, legacySnap) {
-                    if (legacySnap.hasError) {
-                      return Text(
-                        'Failed to load hostels: ${legacySnap.error}',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      );
-                    }
-                    if (!legacySnap.hasData) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-
-                    final legacyHostels = legacySnap.data!.docs;
-                    if (legacyHostels.isEmpty) {
-                      return Padding(
-                        padding: const EdgeInsets.all(40),
-                        child: Center(
-                          child: Text(
-                            'No hostels added yet',
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                        ),
-                      );
-                    }
-
-                    return _hostelGrid(legacyHostels, adminId);
-                  },
-                );
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  State<HostelManagementScreen> createState() => _HostelManagementScreenState();
 }
 
-/* ───────────────────────── HEADER ───────────────────────── */
+class _HostelManagementScreenState extends State<HostelManagementScreen> {
+  // ── helpers ─────────────────────────────────
+  Stream<QuerySnapshot> get _hostelStream {
+    final fs = FirebaseFirestore.instance;
+    // Try ownerId; UI merges with adminId results
+    return fs.collection('hostels').where('ownerId', isEqualTo: widget.adminId).snapshots();
+  }
 
-class _Header extends StatelessWidget {
-  final String adminId;
+  Stream<QuerySnapshot> get _hostelStreamFallback {
+    return FirebaseFirestore.instance.collection('hostels').where('adminId', isEqualTo: widget.adminId).snapshots();
+  }
 
-  const _Header({required this.adminId});
+  Future<void> _showAddHostelDialog() async {
+    final nameCtrl = TextEditingController();
+    final addrCtrl = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    bool loading = false;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            width: 440,
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(color: Theme.of(ctx).brightness == Brightness.dark ? const Color(0xFF1E2130) : Colors.white, borderRadius: AdminRadius.xl, boxShadow: AdminShadows.cardHover),
+            child: Form(key: formKey, child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Row(children: [
+                Container(width: 40, height: 40, decoration: BoxDecoration(gradient: AdminGradients.primary, borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.apartment_rounded, color: Colors.white, size: 20)),
+                const SizedBox(width: 12),
+                const Expanded(child: Text('Add Hostel', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, fontFamily: 'Inter'))),
+                InkWell(onTap: () => Navigator.pop(ctx), child: const Icon(Icons.close_rounded)),
+              ]),
+              const SizedBox(height: 20),
+              AdminTextField(label: 'Hostel / PG Name *', hint: 'e.g., Sunrise Boys Hostel', controller: nameCtrl, validator: (v) => v == null || v.trim().isEmpty ? 'Required' : null),
+              const SizedBox(height: 14),
+              AdminTextField(label: 'Address *', hint: 'Full address', controller: addrCtrl, maxLines: 2, validator: (v) => v == null || v.trim().isEmpty ? 'Required' : null),
+              const SizedBox(height: 20),
+              AdminPrimaryButton(
+                label: 'Create Hostel', icon: Icons.add_rounded, isLoading: loading,
+                onPressed: loading ? null : () async {
+                  if (!formKey.currentState!.validate()) return;
+                  setLocal(() => loading = true);
+                  try {
+                    // Create hostel + default PG
+                    final hostelRef = FirebaseFirestore.instance.collection('hostels').doc();
+                    final pgRef = hostelRef.collection('pgs').doc();
+                    final batch = FirebaseFirestore.instance.batch();
+                    batch.set(hostelRef, {
+                      'name': nameCtrl.text.trim(),
+                      'hostelName': nameCtrl.text.trim(),
+                      'address': addrCtrl.text.trim(),
+                      'ownerId': widget.adminId,
+                      'adminId': widget.adminId,
+                      'floors': 0,
+                      'createdAt': FieldValue.serverTimestamp(),
+                    });
+                    batch.set(pgRef, {
+                      'name': nameCtrl.text.trim(),
+                      'pgName': nameCtrl.text.trim(),
+                      'hostelId': hostelRef.id,
+                      'ownerId': widget.adminId,
+                      'adminId': widget.adminId,
+                      'floors': 0,
+                      'totalBeds': 0,
+                      'availableBeds': 0,
+                      'createdAt': FieldValue.serverTimestamp(),
+                    });
+                    await batch.commit();
+                    if (!ctx.mounted) return;
+                    Navigator.pop(ctx);
+                    await showAdminSuccessDialog(context, title: 'Hostel Created!', message: '"${nameCtrl.text.trim()}" is ready. Add floors to get started.');
+                  } catch (e) {
+                    if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('$e')));
+                  } finally { setLocal(() => loading = false); }
+                },
+              ),
+            ])),
+          ),
+        );
+      }),
+    );
+  }
+
+  Future<void> _editHostel(DocumentSnapshot doc) async {
+    final d = doc.data() as Map<String, dynamic>;
+    final nameCtrl = TextEditingController(text: (d['name'] ?? '').toString());
+    final addrCtrl = TextEditingController(text: (d['address'] ?? '').toString());
+    final formKey = GlobalKey<FormState>();
+    bool loading = false;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            width: 440,
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(color: Theme.of(ctx).brightness == Brightness.dark ? const Color(0xFF1E2130) : Colors.white, borderRadius: AdminRadius.xl, boxShadow: AdminShadows.cardHover),
+            child: Form(key: formKey, child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Row(children: [
+                Container(width: 40, height: 40, decoration: BoxDecoration(gradient: AdminGradients.indigo, borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.edit_rounded, color: Colors.white, size: 18)),
+                const SizedBox(width: 12),
+                const Expanded(child: Text('Edit Hostel', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, fontFamily: 'Inter'))),
+                InkWell(onTap: () => Navigator.pop(ctx), child: const Icon(Icons.close_rounded)),
+              ]),
+              const SizedBox(height: 20),
+              AdminTextField(label: 'Hostel / PG Name *', hint: 'Hostel name', controller: nameCtrl, validator: (v) => v == null || v.trim().isEmpty ? 'Required' : null),
+              const SizedBox(height: 14),
+              AdminTextField(label: 'Address', hint: 'Full address', controller: addrCtrl, maxLines: 2),
+              const SizedBox(height: 20),
+              AdminPrimaryButton(
+                label: 'Save Changes', icon: Icons.save_rounded, isLoading: loading, gradient: AdminGradients.indigo,
+                onPressed: loading ? null : () async {
+                  if (!formKey.currentState!.validate()) return;
+                  setLocal(() => loading = true);
+                  try {
+                    await doc.reference.update({'name': nameCtrl.text.trim(), 'hostelName': nameCtrl.text.trim(), 'address': addrCtrl.text.trim()});
+                    if (!ctx.mounted) return;
+                    Navigator.pop(ctx);
+                  } catch (e) {
+                    if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('$e')));
+                  } finally { setLocal(() => loading = false); }
+                },
+              ),
+            ])),
+          ),
+        );
+      }),
+    );
+  }
+
+  Future<void> _deleteHostel(DocumentSnapshot doc) async {
+    final d = doc.data() as Map<String, dynamic>;
+    final name = (d['name'] ?? 'this hostel').toString();
+    final confirmed = await showAdminConfirmDialog(context, title: 'Delete Hostel?', message: 'Delete "$name"? This cannot be undone.', confirmLabel: 'Delete', isDangerous: true);
+    if (!confirmed) return;
+    try {
+      await doc.reference.delete();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        _iconWrapper(
-          context,
-          child: const Icon(Icons.arrow_back),
-          onTap: () => Navigator.pop(context),
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Scaffold(
+      backgroundColor: isDark ? const Color(0xFF0F1117) : AdminColors.scaffoldLight,
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _showAddHostelDialog,
+        backgroundColor: AdminColors.primary,
+        icon: const Icon(Icons.add_rounded, color: Colors.white),
+        label: const Text('Add Hostel', style: TextStyle(color: Colors.white, fontFamily: 'Inter', fontWeight: FontWeight.w600)),
+      ),
+      body: SafeArea(child: Column(children: [
+        AdminPageHeader(
+          title: 'Hostel Management',
+          subtitle: 'Dashboard → Hostels',
+          icon: Icons.apartment_rounded,
+          iconGradient: AdminGradients.primary,
+          onBack: () => Navigator.pop(context),
         ),
-        const SizedBox(width: 14),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            gradient: _primaryGradient(),
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: const Icon(Icons.apartment, color: Colors.white),
-        ),
-        const SizedBox(width: 14),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hostel Management',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 2),
-            Text(
-              'Manage your hostels, floors & rooms',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
-        ),
-        const Spacer(),
-        InkWell(
-          onTap: () => showDialog(
-            context: context,
-            barrierDismissible: false,
-            builder: (_) => AddHostelDialog(adminId: adminId),
-          ),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-            decoration: BoxDecoration(
-              gradient: _primaryGradient(),
-              borderRadius: BorderRadius.circular(30),
-            ),
-            child: const Row(
-              children: [
-                Icon(Icons.add, color: Colors.white, size: 18),
-                SizedBox(width: 6),
-                Text(
-                  'Add Hostel',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                  ),
+        Expanded(child: StreamBuilder<QuerySnapshot>(
+          stream: _hostelStream,
+          builder: (ctx, snap1) => StreamBuilder<QuerySnapshot>(
+            stream: _hostelStreamFallback,
+            builder: (ctx, snap2) {
+              if (!snap1.hasData && !snap2.hasData) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              // Merge both streams, deduplicate by doc id
+              final all = <String, QueryDocumentSnapshot>{};
+              for (final d in snap1.data?.docs ?? []) all[d.id] = d;
+              for (final d in snap2.data?.docs ?? []) all[d.id] = d;
+              final hostels = all.values.toList();
+              if (hostels.isEmpty) {
+                return AdminEmptyState(
+                  icon: Icons.apartment_rounded, title: 'No hostels yet',
+                  subtitle: 'Create your first hostel to get started.',
+                  actionLabel: 'Add Hostel', onAction: _showAddHostelDialog,
+                );
+              }
+              return ListView.separated(
+                padding: const EdgeInsets.all(20),
+                itemCount: hostels.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 14),
+                itemBuilder: (_, i) => _HostelCard(
+                  doc: hostels[i],
+                  adminId: widget.adminId,
+                  onEdit: () => _editHostel(hostels[i]),
+                  onDelete: () => _deleteHostel(hostels[i]),
                 ),
-              ],
-            ),
+              );
+            },
           ),
-        ),
-      ],
+        )),
+      ])),
     );
   }
 }
 
-/* ───────────────────────── METRICS ───────────────────────── */
-
-class _MetricsAggregator extends StatelessWidget {
+// ─────────────────────────────────────────────
+// HostelCard with aggregated metrics
+// ─────────────────────────────────────────────
+class _HostelCard extends StatelessWidget {
+  final QueryDocumentSnapshot doc;
   final String adminId;
+  final VoidCallback onEdit, onDelete;
+  const _HostelCard({required this.doc, required this.adminId, required this.onEdit, required this.onDelete});
 
-  const _MetricsAggregator({required this.adminId});
+  @override
+  Widget build(BuildContext context) {
+    final d = doc.data() as Map<String, dynamic>;
+    final name = (d['name'] ?? d['hostelName'] ?? 'Hostel').toString();
+    final addr = (d['address'] ?? '').toString();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
-  Future<Map<String, int>> _calculateTotals() async {
-    int floors = 0, rooms = 0, beds = 0;
-
-    final hostels = await FirebaseFirestore.instance
-        .collection('hostels')
-        .where('ownerId', isEqualTo: adminId)
-        .get();
-
-    QuerySnapshot legacyHostels = hostels;
-    if (hostels.docs.isEmpty) {
-      legacyHostels = await FirebaseFirestore.instance
-          .collection('hostels')
-          .where('adminId', isEqualTo: adminId)
-          .get();
-    }
-
-    for (final hostel in legacyHostels.docs) {
-      final pgsSnap = await FirebaseFirestore.instance
-          .collection('hostels')
-          .doc(hostel.id)
-          .collection('pgs')
-          .get();
-
-      for (final pg in pgsSnap.docs) {
-        final floorsSnap = await FirebaseFirestore.instance
-            .collection('hostels')
-            .doc(hostel.id)
-            .collection('pgs')
-            .doc(pg.id)
-            .collection('floors')
-            .get();
-
-        floors += floorsSnap.docs.length;
-
-        for (final floor in floorsSnap.docs) {
-          final roomsSnap = await FirebaseFirestore.instance
-              .collection('hostels')
-              .doc(hostel.id)
-              .collection('pgs')
-              .doc(pg.id)
-              .collection('floors')
-              .doc(floor.id)
-              .collection('rooms')
-              .get();
-
-          rooms += roomsSnap.docs.length;
-
-          for (final room in roomsSnap.docs) {
-            beds += (room['totalBeds'] ?? 0) as int;
+    return FutureBuilder<QuerySnapshot>(
+      future: doc.reference.collection('pgs').get(),
+      builder: (ctx, pgSnap) {
+        int totalFloors = 0, totalBeds = 0, availBeds = 0;
+        if (pgSnap.hasData) {
+          for (final p in pgSnap.data!.docs) {
+            final pd = p.data() as Map<String, dynamic>;
+            totalFloors += _int(pd['floors']);
+            totalBeds += _int(pd['totalBeds']);
+            availBeds += _int(pd['availableBeds']);
           }
         }
-      }
-    }
 
-    return {
-      'hostels': legacyHostels.docs.length,
-      'floors': floors,
-      'rooms': rooms,
-      'beds': beds,
-    };
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<Map<String, int>>(
-      future: _calculateTotals(),
-      builder: (context, snap) {
-        if (!snap.hasData) {
-          return _metricsRow(context, '—', '—', '—', '—');
-        }
-
-        final d = snap.data!;
-        return _metricsRow(
-          context,
-          d['hostels'].toString(),
-          d['floors'].toString(),
-          d['rooms'].toString(),
-          d['beds'].toString(),
-        );
-      },
-    );
-  }
-
-  Widget _metricsRow(
-    BuildContext context,
-    String h,
-    String f,
-    String r,
-    String b,
-  ) {
-    return Row(
-      children: [
-        _MetricCard(
-          'Total Hostels',
-          h,
-          Icons.apartment,
-          const Color(0xFF6C63FF),
-        ),
-        _MetricCard('Total Floors', f, Icons.layers, const Color(0xFF4DD0E1)),
-        _MetricCard('Total Rooms', r, Icons.bed, const Color(0xFFB388FF)),
-        _MetricCard('Total Beds', b, Icons.people, const Color(0xFFFFB74D)),
-      ],
-    );
-  }
-}
-
-class _MetricCard extends StatelessWidget {
-  final String title, value;
-  final IconData icon;
-  final Color color;
-
-  const _MetricCard(this.title, this.value, this.icon, this.color);
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Expanded(
-      child: Container(
-        margin: const EdgeInsets.only(right: 16),
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: theme.cardColor,
-          borderRadius: BorderRadius.circular(18),
-          border: theme.brightness == Brightness.dark
-              ? Border.all(color: theme.colorScheme.outline)
-              : null,
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x14000000),
-              blurRadius: 24,
-              offset: Offset(0, 10),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: theme.textTheme.bodySmall),
-                const SizedBox(height: 6),
-                Text(
-                  value,
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-            const Spacer(),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.15),
-                shape: BoxShape.circle,
+        return Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E2130) : Colors.white,
+            borderRadius: AdminRadius.lg,
+            boxShadow: AdminShadows.card,
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Container(
+                width: 44, height: 44,
+                decoration: BoxDecoration(gradient: AdminGradients.primary, borderRadius: BorderRadius.circular(12)),
+                child: const Icon(Icons.apartment_rounded, color: Colors.white, size: 22),
               ),
-              child: Icon(icon, color: color),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/* ───────────────────────── HOSTEL CARD ───────────────────────── */
-
-class _HostelAggregator extends StatelessWidget {
-  final String hostelId, name, address, adminId;
-
-  const _HostelAggregator({
-    required this.hostelId,
-    required this.name,
-    required this.address,
-    required this.adminId,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<QuerySnapshot>(
-      future: FirebaseFirestore.instance
-          .collection('hostels')
-          .doc(hostelId)
-          .collection('pgs')
-          .get(),
-      builder: (context, pSnap) {
-        if (!pSnap.hasData) return const SizedBox();
-
-        final pgs = pSnap.data!.docs;
-        if (pgs.isEmpty) {
-          return _HostelCard(
-            hostelId: hostelId,
-            name: name,
-            address: address,
-            adminId: adminId,
-            floors: 0,
-            rooms: 0,
-            occRooms: 0,
-            beds: 0,
-            occBeds: 0,
-            pgs: const [],
-          );
-        }
-
-        return FutureBuilder<List<_PgAggregate>>(
-          future: Future.wait(
-            pgs.map((pg) async {
-              final floorsSnap = await FirebaseFirestore.instance
-                  .collection('hostels')
-                  .doc(hostelId)
-                  .collection('pgs')
-                  .doc(pg.id)
-                  .collection('floors')
-                  .get();
-
-              int floorsCount = floorsSnap.docs.length;
-              int rooms = 0;
-              int occRooms = 0;
-              int beds = 0;
-              int occBeds = 0;
-
-              for (final f in floorsSnap.docs) {
-                final roomsSnap = await FirebaseFirestore.instance
-                    .collection('hostels')
-                    .doc(hostelId)
-                    .collection('pgs')
-                    .doc(pg.id)
-                    .collection('floors')
-                    .doc(f.id)
-                    .collection('rooms')
-                    .get();
-                for (final r in roomsSnap.docs) {
-                  final d = r.data();
-                  final tbRaw = d['totalBeds'];
-                  final obRaw = d['occupiedBeds'];
-                  final tb = tbRaw is int ? tbRaw : int.tryParse('$tbRaw') ?? 0;
-                  final ob = obRaw is int ? obRaw : int.tryParse('$obRaw') ?? 0;
-                  rooms++;
-                  beds += tb;
-                  occBeds += ob;
-                  if (ob > 0) occRooms++;
-                }
-              }
-
-              final pgData = pg.data() as Map<String, dynamic>;
-              final pgName = (pgData['name'] ?? pgData['pgName'] ?? 'PG')
-                  .toString();
-              return _PgAggregate(
-                pgId: pg.id,
-                pgName: pgName,
-                floors: floorsCount,
-                rooms: rooms,
-                occRooms: occRooms,
-                beds: beds,
-                occBeds: occBeds,
-              );
-            }),
-          ),
-          builder: (context, aggSnap) {
-            if (!aggSnap.hasData) return const SizedBox();
-            final aggs = aggSnap.data!;
-
-            int floors = 0, rooms = 0, occRooms = 0, beds = 0, occBeds = 0;
-            final pgOptions = <_PgOptionMini>[];
-            for (final a in aggs) {
-              floors += a.floors;
-              rooms += a.rooms;
-              occRooms += a.occRooms;
-              beds += a.beds;
-              occBeds += a.occBeds;
-              pgOptions.add(_PgOptionMini(id: a.pgId, name: a.pgName));
-            }
-
-            return _HostelCard(
-              hostelId: hostelId,
-              name: name,
-              address: address,
-              adminId: adminId,
-              floors: floors,
-              rooms: rooms,
-              occRooms: occRooms,
-              beds: beds,
-              occBeds: occBeds,
-              pgs: pgOptions,
-            );
-          },
-        );
-      },
-    );
-  }
-}
-
-class _PgAggregate {
-  final String pgId;
-  final String pgName;
-  final int floors;
-  final int rooms;
-  final int occRooms;
-  final int beds;
-  final int occBeds;
-
-  _PgAggregate({
-    required this.pgId,
-    required this.pgName,
-    required this.floors,
-    required this.rooms,
-    required this.occRooms,
-    required this.beds,
-    required this.occBeds,
-  });
-}
-
-class _PgOptionMini {
-  final String id;
-  final String name;
-
-  const _PgOptionMini({required this.id, required this.name});
-}
-
-class _HostelCard extends StatelessWidget {
-  final String hostelId, name, address, adminId;
-  final int floors, rooms, occRooms, beds, occBeds;
-  final List<_PgOptionMini> pgs;
-
-  const _HostelCard({
-    required this.hostelId,
-    required this.name,
-    required this.address,
-    required this.adminId,
-    required this.floors,
-    required this.rooms,
-    required this.occRooms,
-    required this.beds,
-    required this.occBeds,
-    required this.pgs,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Container(
-      decoration: BoxDecoration(
-        color: theme.cardColor,
-        borderRadius: BorderRadius.circular(22),
-        border: theme.brightness == Brightness.dark
-            ? Border.all(color: theme.colorScheme.outline)
-            : null,
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x14000000),
-            blurRadius: 28,
-            offset: Offset(0, 14),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Container(
-            height: 8,
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                colors: [Color(0xFF6C3BFF), Color(0xFFE10098)],
+              const SizedBox(width: 12),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, fontFamily: 'Inter')),
+                if (addr.isNotEmpty) Text(addr, style: const TextStyle(fontSize: 12, color: AdminColors.textSecondary, fontFamily: 'Inter')),
+              ])),
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.more_vert_rounded, color: AdminColors.textMuted),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                itemBuilder: (_) => [
+                  _menuItem('manage', Icons.layers_rounded, 'Manage Floors'),
+                  _menuItem('edit', Icons.edit_rounded, 'Edit'),
+                  _menuItem('delete', Icons.delete_rounded, 'Delete', danger: true),
+                ],
+                onSelected: (v) {
+                  if (v == 'manage') {
+                    final pgDocs = pgSnap.data?.docs ?? [];
+                    if (pgDocs.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No PG found for this hostel')));
+                      return;
+                    }
+                    final pgData = pgDocs.first.data() as Map<String, dynamic>;
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => FloorManagementScreen(hostelId: doc.id, pgId: pgDocs.first.id, hostelName: name, pgName: (pgData['name'] ?? pgData['pgName'] ?? '').toString(), adminId: adminId)));
+                  } else if (v == 'edit') { onEdit(); }
+                  else if (v == 'delete') { onDelete(); }
+                },
               ),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+            ]),
+            const SizedBox(height: 16),
+            Row(children: [
+              _MiniStat(icon: Icons.layers_rounded, label: 'Floors', value: '$totalFloors'),
+              const SizedBox(width: 20),
+              _MiniStat(icon: Icons.bed_rounded, label: 'Beds', value: '$totalBeds'),
+              const SizedBox(width: 20),
+              _MiniStat(icon: Icons.check_circle_rounded, label: 'Vacant', value: '$availBeds', color: AdminColors.success),
+            ]),
+            const SizedBox(height: 12),
+            if (totalBeds > 0) ...[
+              OccupancyBar(label: 'Occupancy', occupied: totalBeds - availBeds, total: totalBeds),
+            ],
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  final pgDocs = pgSnap.data?.docs ?? [];
+                  if (pgDocs.isEmpty) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No PG found'))); return; }
+                  final pgData = pgDocs.first.data() as Map<String, dynamic>;
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => FloorManagementScreen(hostelId: doc.id, pgId: pgDocs.first.id, hostelName: name, pgName: (pgData['name'] ?? pgData['pgName'] ?? '').toString(), adminId: adminId)));
+                },
+                icon: const Icon(Icons.layers_rounded, size: 16),
+                label: const Text('Manage Floors', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600)),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  side: const BorderSide(color: AdminColors.primary),
+                  foregroundColor: AdminColors.primary,
+                ),
+              ),
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(22),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        name,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                    _iconAction(context, Icons.edit, Colors.blue),
-                    const SizedBox(width: 8),
-                    _iconAction(context, Icons.delete, Colors.red),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Text(address, style: theme.textTheme.bodySmall),
-                const SizedBox(height: 16),
-                _statTile(
-                  context,
-                  'Floors',
-                  floors.toString(),
-                  theme.colorScheme.surfaceVariant,
-                ),
-                _statTile(
-                  context,
-                  'Total Rooms',
-                  rooms.toString(),
-                  theme.colorScheme.surfaceVariant,
-                ),
-                _statTile(
-                  context,
-                  'Occupied Rooms',
-                  '$occRooms/$rooms',
-                  theme.colorScheme.surfaceVariant,
-                ),
-                _statTile(
-                  context,
-                  'Occupied Beds',
-                  '$occBeds/$beds',
-                  theme.colorScheme.surfaceVariant,
-                ),
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    icon: const Icon(Icons.visibility),
-                    label: const Text('Manage Floors & Rooms'),
-                    onPressed: () {
-                      _openPgFloorManagement(context);
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _statTile(BuildContext context, String t, String v, Color bg) {
-    final theme = Theme.of(context);
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(
-        children: [
-          Text(t, style: theme.textTheme.bodySmall),
-          const Spacer(),
-          Text(
-            v,
-            style: theme.textTheme.bodyMedium?.copyWith(
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _iconAction(BuildContext context, IconData icon, Color color) {
-    return Container(
-      padding: const EdgeInsets.all(6),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Icon(icon, size: 16, color: color),
-    );
-  }
-
-  Future<void> _openPgFloorManagement(BuildContext context) async {
-    if (pgs.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No PGs found for this hostel')),
-      );
-      return;
-    }
-    if (pgs.length == 1) {
-      final pg = pgs.first;
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => FloorManagementScreen(
-            hostelId: hostelId,
-            pgId: pg.id,
-            hostelName: name,
-            pgName: pg.name,
-            adminId: adminId,
-          ),
-        ),
-      );
-      return;
-    }
-
-    final selected = await showDialog<_PgOptionMini>(
-      context: context,
-      builder: (context) {
-        return SimpleDialog(
-          title: const Text('Select PG'),
-          children: pgs
-              .map(
-                (pg) => SimpleDialogOption(
-                  onPressed: () => Navigator.pop(context, pg),
-                  child: Text(pg.name),
-                ),
-              )
-              .toList(),
+          ]),
         );
       },
     );
+  }
 
-    if (selected == null) return;
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => FloorManagementScreen(
-          hostelId: hostelId,
-          pgId: selected.id,
-          hostelName: name,
-          pgName: selected.name,
-          adminId: adminId,
-        ),
-      ),
+  int _int(dynamic v) => v is int ? v : int.tryParse('$v') ?? 0;
+
+  PopupMenuItem<String> _menuItem(String value, IconData icon, String label, {bool danger = false}) {
+    return PopupMenuItem(
+      value: value,
+      child: Row(children: [
+        Icon(icon, size: 16, color: danger ? AdminColors.danger : AdminColors.textSecondary),
+        const SizedBox(width: 8),
+        Text(label, style: TextStyle(fontSize: 14, fontFamily: 'Inter', color: danger ? AdminColors.danger : null)),
+      ]),
     );
   }
 }
 
-/* ───────────────────────── HELPERS ───────────────────────── */
+class _MiniStat extends StatelessWidget {
+  final IconData icon; final String label, value; final Color? color;
+  const _MiniStat({required this.icon, required this.label, required this.value, this.color});
 
-Widget _iconWrapper(
-  BuildContext context, {
-  required Widget child,
-  VoidCallback? onTap,
-}) {
-  return InkWell(
-    onTap: onTap,
-    borderRadius: BorderRadius.circular(12),
-    child: Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
-        borderRadius: BorderRadius.circular(12),
-        border: Theme.of(context).brightness == Brightness.dark
-            ? Border.all(color: Theme.of(context).colorScheme.outline)
-            : null,
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x14000000),
-            blurRadius: 12,
-            offset: Offset(0, 6),
-          ),
-        ],
-      ),
-      child: child,
-    ),
-  );
-}
-
-LinearGradient _primaryGradient() => const LinearGradient(
-  colors: [Color(0xFF6C3BFF), Color(0xFF9B4DFF), Color(0xFFE10098)],
-);
-
-Widget _hostelGrid(List<QueryDocumentSnapshot> hostels, String adminId) {
-  return GridView.builder(
-    shrinkWrap: true,
-    physics: const NeverScrollableScrollPhysics(),
-    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-      crossAxisCount: 2,
-      crossAxisSpacing: 24,
-      mainAxisSpacing: 24,
-      childAspectRatio: 1.22,
-    ),
-    itemCount: hostels.length,
-    itemBuilder: (_, i) {
-      final h = hostels[i];
-      final d = h.data() as Map<String, dynamic>;
-      return _HostelAggregator(
-        hostelId: h.id,
-        name: d['name'] ?? '',
-        address: d['address'] ?? '',
-        adminId: adminId,
-      );
-    },
-  );
+  @override
+  Widget build(BuildContext context) => Row(children: [
+    Icon(icon, size: 14, color: color ?? AdminColors.primary),
+    const SizedBox(width: 4),
+    Text('$value $label', style: TextStyle(fontSize: 12, fontFamily: 'Inter', color: color ?? AdminColors.textSecondary)),
+  ]);
 }

@@ -8,7 +8,12 @@ import 'login_screen.dart';
 import 'hostel_management_screen.dart';
 import 'add_resident_screen.dart';
 import 'allocate_resident_screen.dart';
-import '../theme/app_text_styles.dart';
+import '../utils/admin_design_system.dart';
+import '../widgets/admin_widgets.dart';
+
+// ─────────────────────────────────────────────────────────────
+// ADMIN DASHBOARD
+// ─────────────────────────────────────────────────────────────
 
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({super.key});
@@ -20,6 +25,7 @@ class AdminDashboard extends StatefulWidget {
 class _AdminDashboardState extends State<AdminDashboard> {
   bool _checkedRole = false;
   String? _adminId;
+  bool _fabOpen = false;
 
   @override
   void initState() {
@@ -29,30 +35,12 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   Future<void> _ensureAdminRole() async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      _signOutToLogin();
-      return;
-    }
-
+    if (user == null) { _signOutToLogin(); return; }
     try {
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .get();
-      final role = userDoc.data()?['role'];
-
-      if (role != 'admin') {
-        _showRoleBlocked();
-        return;
-      }
-
-      setState(() {
-        _adminId = user.uid;
-        _checkedRole = true;
-      });
-    } catch (_) {
-      _signOutToLogin();
-    }
+      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      if (doc.data()?['role'] != 'admin') { _showRoleBlocked(); return; }
+      setState(() { _adminId = user.uid; _checkedRole = true; });
+    } catch (_) { _signOutToLogin(); }
   }
 
   void _showRoleBlocked() {
@@ -61,593 +49,839 @@ class _AdminDashboardState extends State<AdminDashboard> {
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Access Denied'),
-        content: const Text(
-          'This account is not authorized to access the admin dashboard.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('OK'),
-          ),
-        ],
+        content: const Text('This account is not authorized to access the admin dashboard.'),
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK'))],
       ),
     ).then((_) => _signOutToLogin());
   }
 
   void _signOutToLogin() {
     if (!mounted) return;
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-      (_) => false,
-    );
+    Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const LoginScreen()), (_) => false);
   }
 
   @override
   Widget build(BuildContext context) {
-    final date = DateFormat('MMM dd, yyyy').format(DateTime.now());
-
     if (!_checkedRole || _adminId == null) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-
     final adminId = _adminId!;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final app = context.findAncestorWidgetOfExactType<SmartStayApp>();
+    final date = DateFormat('EEE, MMM dd').format(DateTime.now());
 
     return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(28),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _Header(date: date),
-            const SizedBox(height: 22),
-            const SizedBox(height: 6),
-            _StatsRow(adminId: adminId),
-            const SizedBox(height: 32),
-            _QuickActions(context, adminId),
-            const SizedBox(height: 32),
-            _MainGrid(adminId: adminId),
-          ],
-        ),
+      backgroundColor: isDark ? const Color(0xFF0F1117) : const Color(0xFFF4F6FB),
+      body: Stack(
+        children: [
+          SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 24, 24, 100),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ── Header ──────────────────────────────
+                _DashboardHeader(date: date, app: app, isDark: isDark),
+                const SizedBox(height: 28),
+                // ── Welcome banner ───────────────────────
+                _WelcomeBanner(adminId: adminId),
+                const SizedBox(height: 28),
+                // ── 6-card KPI grid ──────────────────────
+                _StatsSection(adminId: adminId),
+                const SizedBox(height: 28),
+                // ── Recent Activity & Upcoming Fee Dues ──
+                LayoutBuilder(builder: (ctx, c) {
+                  final wide = c.maxWidth >= 900;
+                  if (wide) {
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: _RecentActivityCard(adminId: adminId)),
+                        const SizedBox(width: 20),
+                        Expanded(child: _UpcomingFeeDuesCard(adminId: adminId)),
+                      ],
+                    );
+                  }
+                  return Column(children: [
+                    _RecentActivityCard(adminId: adminId),
+                    const SizedBox(height: 20),
+                    _UpcomingFeeDuesCard(adminId: adminId),
+                  ]);
+                }),
+              ],
+            ),
+          ),
+          // ── Expandable FAB ───────────────────────────
+          _ExpandableFab(
+            adminId: adminId,
+            isOpen: _fabOpen,
+            onToggle: () => setState(() => _fabOpen = !_fabOpen),
+          ),
+        ],
       ),
     );
   }
 }
 
-/* =========================================================
-   HEADER
-========================================================= */
-
-class _Header extends StatelessWidget {
+// ─────────────────────────────────────────────
+// HEADER
+// ─────────────────────────────────────────────
+class _DashboardHeader extends StatelessWidget {
   final String date;
-  const _Header({required this.date});
+  final SmartStayApp? app;
+  final bool isDark;
+  const _DashboardHeader({required this.date, required this.app, required this.isDark});
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final app = context.findAncestorWidgetOfExactType<SmartStayApp>();
-
     return Row(
       children: [
         Container(
-          height: 44,
-          width: 44,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFF6C3BFF), Color(0xFF8E6CFF)],
-            ),
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: const Icon(Icons.apartment, color: Colors.white),
+          width: 46, height: 46,
+          decoration: BoxDecoration(gradient: AdminGradients.primary, borderRadius: BorderRadius.circular(14)),
+          child: const Icon(Icons.apartment_rounded, color: Colors.white, size: 22),
         ),
         const SizedBox(width: 12),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
-            Text('SmartStay', style: AppTextStyles.h3),
-            Text('Admin Dashboard', style: AppTextStyles.bodySmall),
-          ],
-        ),
+        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('SmartStay', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, fontFamily: 'Inter', letterSpacing: -0.4)),
+          Text('Admin Dashboard', style: TextStyle(fontSize: 12, color: isDark ? const Color(0xFF8B9CB6) : AdminColors.textMuted, fontFamily: 'Inter')),
+        ]),
         const Spacer(),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: _card(context),
-          child: Row(
-            children: [
-              const Icon(Icons.calendar_today_outlined, size: 16),
-              const SizedBox(width: 8),
-              Text(date, style: AppTextStyles.bodySmall),
-            ],
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E2130) : Colors.white,
+            borderRadius: BorderRadius.circular(10),
+            boxShadow: AdminShadows.card,
           ),
+          child: Row(children: [
+            const Icon(Icons.calendar_today_outlined, size: 14, color: AdminColors.textSecondary),
+            const SizedBox(width: 6),
+            Text(date, style: const TextStyle(fontSize: 12, fontFamily: 'Inter', color: AdminColors.textSecondary)),
+          ]),
         ),
-        const SizedBox(width: 14),
-        IconButton(
-          tooltip: isDark ? 'Light Mode' : 'Dark Mode',
-          icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
-          onPressed: () => app!.themeController.toggleTheme(),
-        ),
-        const SizedBox(width: 8),
-        IconButton(
-          tooltip: 'Logout',
-          icon: const Icon(Icons.logout),
-          onPressed: () async {
-            await FirebaseAuth.instance.signOut();
-            if (!context.mounted) return;
-            Navigator.pushAndRemoveUntil(
-              context,
-              MaterialPageRoute(builder: (_) => const LoginScreen()),
-              (_) => false,
-            );
-          },
-        ),
+        const SizedBox(width: 10),
+        _HeaderIconBtn(icon: isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded, onTap: () => app?.themeController.toggleTheme()),
+        const SizedBox(width: 6),
+        _HeaderIconBtn(icon: Icons.logout_rounded, onTap: () async {
+          await FirebaseAuth.instance.signOut();
+          if (!context.mounted) return;
+          Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const LoginScreen()), (_) => false);
+        }),
       ],
     );
   }
 }
 
-/* =========================================================
-   STATS
-========================================================= */
-
-class _StatsRow extends StatelessWidget {
-  final String adminId;
-  const _StatsRow({required this.adminId});
+class _HeaderIconBtn extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  const _HeaderIconBtn({required this.icon, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final residentsStream = FirebaseFirestore.instance
-        .collection('residents')
-        .where('adminId', isEqualTo: adminId)
-        .snapshots();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        width: 38, height: 38,
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1E2130) : Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          boxShadow: AdminShadows.card,
+        ),
+        child: Icon(icon, size: 18, color: AdminColors.textSecondary),
+      ),
+    );
+  }
+}
 
-    final pgsStream = FirebaseFirestore.instance
-        .collectionGroup('pgs')
-        .where('adminId', isEqualTo: adminId)
-        .snapshots();
-    final pgsFallbackStream = FirebaseFirestore.instance
-        .collectionGroup('pgs')
-        .where('ownerId', isEqualTo: adminId)
-        .snapshots();
+// ─────────────────────────────────────────────
+// WELCOME BANNER
+// ─────────────────────────────────────────────
+class _WelcomeBanner extends StatelessWidget {
+  final String adminId;
+  const _WelcomeBanner({required this.adminId});
 
-    final complaintsStream = FirebaseFirestore.instance
-        .collection('complaints')
-        .where('adminId', isEqualTo: adminId)
-        .snapshots();
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<DocumentSnapshot>(
+      future: FirebaseFirestore.instance.collection('users').doc(adminId).get(),
+      builder: (ctx, snap) {
+        final name = (snap.data?.data() as Map<String, dynamic>?)?['name']?.toString() ?? 'Admin';
+        return Container(
+          padding: const EdgeInsets.all(22),
+          decoration: BoxDecoration(
+            gradient: AdminGradients.primary,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [BoxShadow(color: AdminColors.primary.withOpacity(0.3), blurRadius: 24, offset: const Offset(0, 10))],
+          ),
+          child: Row(children: [
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Good ${_greeting()}, $name! 👋', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, fontFamily: 'Inter', color: Colors.white, letterSpacing: -0.3)),
+              const SizedBox(height: 6),
+              const Text("Here's your hostel overview for today.", style: TextStyle(fontSize: 13, color: Colors.white70, fontFamily: 'Inter')),
+            ])),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(color: Colors.white.withOpacity(0.15), borderRadius: BorderRadius.circular(16)),
+              child: const Icon(Icons.dashboard_rounded, color: Colors.white, size: 28),
+            ),
+          ]),
+        );
+      },
+    );
+  }
 
-    final paymentsStream = FirebaseFirestore.instance
-        .collection('payments')
-        .where('adminId', isEqualTo: adminId)
-        .snapshots();
+  String _greeting() {
+    final h = DateTime.now().hour;
+    if (h < 12) return 'Morning';
+    if (h < 17) return 'Afternoon';
+    return 'Evening';
+  }
+}
 
+// ─────────────────────────────────────────────
+// 6-CARD KPI STATS
+// ─────────────────────────────────────────────
+class _StatsSection extends StatefulWidget {
+  final String adminId;
+  const _StatsSection({required this.adminId});
+
+  @override
+  State<_StatsSection> createState() => _StatsSectionState();
+}
+
+class _StatsSectionState extends State<_StatsSection> {
+  int _totalBeds = 0;
+  int _availBeds = 0;
+  String _lastHostelKey = '';
+  bool _fetching = false;
+
+  /// Fetches all PG docs from hostels owned by this admin.
+  Future<void> _fetchPgAggregates(List<QueryDocumentSnapshot> hostels) async {
+    _fetching = true;
+    int tb = 0, ab = 0;
+    for (final hostel in hostels) {
+      try {
+        final pgSnap = await hostel.reference.collection('pgs').get();
+        for (final pg in pgSnap.docs) {
+          final d = pg.data();
+          tb += _toInt(d['totalBeds']);
+          ab += _toInt(d['availableBeds']);
+        }
+      } catch (_) {}
+    }
+    _fetching = false;
+    if (mounted) {
+      setState(() {
+        _totalBeds = tb;
+        _availBeds = ab;
+      });
+    }
+  }
+
+  int _toInt(dynamic v) => v is int ? v : int.tryParse('$v') ?? 0;
+
+  @override
+  Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot>(
-      stream: pgsStream,
-      builder: (context, pgsSnap) {
-        if (pgsSnap.hasError) {
-          return _buildStatsGrid(
-            context: context,
-            pgDocs: const [],
-            residentsStream: residentsStream,
-            complaintsStream: complaintsStream,
-            paymentsStream: paymentsStream,
-          );
-        }
-        if (!pgsSnap.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        final pgDocs = pgsSnap.data?.docs ?? [];
-        if (pgDocs.isEmpty) {
-          return StreamBuilder<QuerySnapshot>(
-            stream: pgsFallbackStream,
-            builder: (context, fallbackSnap) {
-              if (fallbackSnap.hasError) {
-                return _buildStatsGrid(
-                  context: context,
-                  pgDocs: const [],
-                  residentsStream: residentsStream,
-                  complaintsStream: complaintsStream,
-                  paymentsStream: paymentsStream,
+      stream: FirebaseFirestore.instance.collection('residents').where('adminId', isEqualTo: widget.adminId).snapshots(),
+      builder: (ctx, residentsSnap) => StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance.collection('hostels').where('ownerId', isEqualTo: widget.adminId).snapshots(),
+        builder: (ctx, hostelsSnap) => StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance.collection('payments').where('adminId', isEqualTo: widget.adminId).snapshots(),
+          builder: (ctx, paymentsSnap) {
+            final residents = residentsSnap.data?.docs ?? [];
+            final hostels = hostelsSnap.data?.docs ?? [];
+            final payments = paymentsSnap.data?.docs ?? [];
+
+            // Re-fetch PG aggregates whenever hostels change
+            if (hostelsSnap.hasData) {
+              final key = hostels.map((h) => h.id).join(',');
+              if (key != _lastHostelKey && !_fetching) {
+                _lastHostelKey = key;
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  _fetchPgAggregates(hostels);
+                });
+              }
+            }
+
+            final totalResidents = residents.length;
+            final allocated = residents.where((d) => (d.data() as Map)['isAllocated'] == true).length;
+
+            final totalBeds = _totalBeds;
+            final availBeds = _availBeds;
+            final occupied = (totalBeds - availBeds).clamp(0, totalBeds);
+
+            int pending = 0;
+            for (final p in payments) {
+              final d = p.data() as Map<String, dynamic>;
+              if ((d['status'] ?? '').toString().toLowerCase() == 'pending') {
+                pending += _toInt(d['amount'] ?? d['monthlyFee']);
+              }
+            }
+
+            final cards = [
+              _StatData('Total Hostels', hostels.length.toString(), Icons.apartment_rounded, AdminColors.hostelsIcon, AdminColors.hostelsBg, '${hostels.length} properties'),
+              _StatData('Total Residents', totalResidents.toString(), Icons.people_alt_rounded, AdminColors.residentsIcon, AdminColors.residentsBg, '$allocated allocated'),
+              _StatData('Total Beds', totalBeds.toString(), Icons.bed_rounded, AdminColors.roomsIcon, AdminColors.roomsBg, '$occupied occupied'),
+              _StatData('Vacant Beds', availBeds.toString(), Icons.check_circle_rounded, AdminColors.bedsIcon, AdminColors.bedsBg, 'Available now'),
+              _StatData('Pending Dues', pending > 0 ? '₹$pending' : '₹0', Icons.currency_rupee_rounded, AdminColors.pendingIcon, AdminColors.pendingBg, 'Outstanding'),
+              _StatData('Occupancy', totalBeds > 0 ? '${(occupied / totalBeds * 100).toInt()}%' : '0%', Icons.donut_large_rounded, AdminColors.floorsIcon, AdminColors.floorsBg, '$occupied/$totalBeds filled'),
+            ];
+
+            return LayoutBuilder(builder: (ctx, c) {
+              final cols = c.maxWidth >= 900 ? 3 : c.maxWidth >= 560 ? 2 : 1;
+              return GridView.count(
+                crossAxisCount: cols,
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisSpacing: 16,
+                mainAxisSpacing: 16,
+                childAspectRatio: 1.65,
+                children: cards.map((s) => AdminStatCard(
+                  title: s.title, value: s.value, icon: s.icon,
+                  iconColor: s.iconColor, bgColor: s.bgColor, subtitle: s.subtitle,
+                )).toList(),
+              );
+            });
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _StatData {
+  final String title, value, subtitle;
+  final IconData icon;
+  final Color iconColor, bgColor;
+  const _StatData(this.title, this.value, this.icon, this.iconColor, this.bgColor, this.subtitle);
+}
+
+
+// ─────────────────────────────────────────────
+// RECENT ACTIVITY CARD
+// ─────────────────────────────────────────────
+class _RecentActivityCard extends StatelessWidget {
+  final String adminId;
+  const _RecentActivityCard({required this.adminId});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 20, offset: const Offset(0, 8))],
+        border: Border.all(color: const Color(0xFFF1F5F9)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(color: const Color(0xFFFEF2F2), borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.notifications_active_rounded, size: 20, color: Color(0xFFEF4444)),
+            ),
+            const SizedBox(width: 12),
+            const Text('Recent Activity', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, fontFamily: 'Inter', letterSpacing: -0.3)),
+          ]),
+          const SizedBox(height: 20),
+          _ActivityStream(adminId: adminId),
+        ],
+      ),
+    );
+  }
+}
+
+class _ActivityStream extends StatelessWidget {
+  final String adminId;
+  const _ActivityStream({required this.adminId});
+
+  @override
+  Widget build(BuildContext context) {
+    // Merge payments, complaints, residents, and notices into a single timeline
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance.collection('payments').where('adminId', isEqualTo: adminId).orderBy('paidAt', descending: true).limit(3).snapshots(),
+      builder: (ctx, paymentsSnap) => StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance.collection('complaints').where('adminId', isEqualTo: adminId).orderBy('createdAt', descending: true).limit(3).snapshots(),
+        builder: (ctx, complaintsSnap) => StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance.collection('residents').where('adminId', isEqualTo: adminId).orderBy('createdAt', descending: true).limit(3).snapshots(),
+          builder: (ctx, residentsSnap) => StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance.collection('notices').where('createdByAdminId', isEqualTo: adminId).orderBy('createdAt', descending: true).limit(2).snapshots(),
+            builder: (ctx, noticesSnap) {
+              final List<_ActivityItem> items = [];
+
+              // Payments
+              for (final doc in (paymentsSnap.data?.docs ?? [])) {
+                final d = doc.data() as Map<String, dynamic>;
+                final name = (d['residentName'] ?? d['fullName'] ?? 'Resident').toString();
+                final amount = d['amount'] ?? d['monthlyFee'] ?? 0;
+                final ts = d['paidAt'] as Timestamp?;
+                if (ts != null) {
+                  items.add(_ActivityItem(
+                    name: name,
+                    description: 'Paid monthly fees of ₹$amount',
+                    time: ts.toDate(),
+                    color: const Color(0xFF22C55E),
+                  ));
+                }
+              }
+
+              // Complaints
+              for (final doc in (complaintsSnap.data?.docs ?? [])) {
+                final d = doc.data() as Map<String, dynamic>;
+                final name = (d['residentName'] ?? d['fullName'] ?? 'Resident').toString();
+                final title = (d['title'] ?? d['subject'] ?? 'Issue reported').toString();
+                final ts = d['createdAt'] as Timestamp?;
+                if (ts != null) {
+                  items.add(_ActivityItem(
+                    name: name,
+                    description: 'Raised complaint: $title',
+                    time: ts.toDate(),
+                    color: const Color(0xFFF97316),
+                  ));
+                }
+              }
+
+              // Residents (check-ins)
+              for (final doc in (residentsSnap.data?.docs ?? [])) {
+                final d = doc.data() as Map<String, dynamic>;
+                final name = (d['fullName'] ?? d['name'] ?? 'Resident').toString();
+                final isAlloc = d['isAllocated'] == true;
+                final bedId = (d['allocationDetails'] as Map?)?['bedId'] ?? d['bedId'];
+                final ts = d['createdAt'] as Timestamp?;
+                if (ts != null) {
+                  items.add(_ActivityItem(
+                    name: name,
+                    description: isAlloc ? 'Joined the hostel${bedId != null ? ' – Bed $bedId' : ''}' : 'Invited to join',
+                    time: ts.toDate(),
+                    color: const Color(0xFF3B82F6),
+                  ));
+                }
+              }
+
+              // Notices
+              for (final doc in (noticesSnap.data?.docs ?? [])) {
+                final d = doc.data() as Map<String, dynamic>;
+                final title = (d['title'] ?? 'Notice').toString();
+                final ts = d['createdAt'] as Timestamp?;
+                if (ts != null) {
+                  items.add(_ActivityItem(
+                    name: 'Admin',
+                    description: 'Posted: $title',
+                    time: ts.toDate(),
+                    color: const Color(0xFF8B5CF6),
+                  ));
+                }
+              }
+
+              items.sort((a, b) => b.time.compareTo(a.time));
+              final display = items.take(5).toList();
+
+              if (display.isEmpty) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Center(child: Text('No recent activity', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13, fontFamily: 'Inter'))),
                 );
               }
-              if (!fallbackSnap.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              final fallbackPgs = fallbackSnap.data?.docs ?? [];
-              return _buildStatsGrid(
-                context: context,
-                pgDocs: fallbackPgs,
-                residentsStream: residentsStream,
-                complaintsStream: complaintsStream,
-                paymentsStream: paymentsStream,
-              );
+
+              return Column(children: display.map((item) => _ActivityTile(item: item)).toList());
             },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ActivityItem {
+  final String name, description;
+  final DateTime time;
+  final Color color;
+  const _ActivityItem({required this.name, required this.description, required this.time, required this.color});
+}
+
+class _ActivityTile extends StatelessWidget {
+  final _ActivityItem item;
+  const _ActivityTile({required this.item});
+
+  String _timeAgo(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours} hour${diff.inHours == 1 ? '' : 's'} ago';
+    if (diff.inDays < 7) return '${diff.inDays} day${diff.inDays == 1 ? '' : 's'} ago';
+    return DateFormat('MMM dd').format(dt);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 10, height: 10,
+            margin: const EdgeInsets.only(top: 5),
+            decoration: BoxDecoration(shape: BoxShape.circle, color: item.color),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(item.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14, fontFamily: 'Inter', letterSpacing: -0.1)),
+                const SizedBox(height: 2),
+                Text(item.description, style: const TextStyle(fontSize: 13, color: Color(0xFF64748B), fontFamily: 'Inter')),
+                const SizedBox(height: 4),
+                Text(_timeAgo(item.time), style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8), fontFamily: 'Inter')),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// UPCOMING FEE DUES CARD
+// ─────────────────────────────────────────────
+class _UpcomingFeeDuesCard extends StatelessWidget {
+  final String adminId;
+  const _UpcomingFeeDuesCard({required this.adminId});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 20, offset: const Offset(0, 8))],
+        border: Border.all(color: const Color(0xFFF1F5F9)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(color: const Color(0xFFFFF7ED), borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.currency_rupee_rounded, size: 20, color: Color(0xFFF97316)),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text('Upcoming Fee Dues', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, fontFamily: 'Inter', letterSpacing: -0.3)),
+            ),
+            Icon(Icons.visibility_rounded, size: 18, color: const Color(0xFF94A3B8)),
+          ]),
+          const SizedBox(height: 20),
+          _FeeDuesList(adminId: adminId),
+        ],
+      ),
+    );
+  }
+}
+
+class _FeeDuesList extends StatefulWidget {
+  final String adminId;
+  const _FeeDuesList({required this.adminId});
+
+  @override
+  State<_FeeDuesList> createState() => _FeeDuesListState();
+}
+
+class _FeeDuesListState extends State<_FeeDuesList> {
+  List<_DueItem> _resolvedItems = [];
+  bool _resolved = false;
+  String _lastKey = '';
+
+  Future<void> _resolveRoomData(List<QueryDocumentSnapshot> docs) async {
+    final now = DateTime.now();
+    final List<_DueItem> items = [];
+
+    for (final doc in docs) {
+      final d = doc.data() as Map<String, dynamic>;
+      final name = (d['fullName'] ?? d['name'] ?? 'Resident').toString();
+      final alloc = d['allocationDetails'] as Map<String, dynamic>?;
+
+      final hostelId = alloc?['hostelId'] ?? d['hostelId'];
+      final pgId = alloc?['pgId'] ?? d['pgId'];
+      final floorId = alloc?['floorId'] ?? d['floorId'];
+      final roomId = alloc?['roomId'] ?? d['roomId'];
+
+      String roomNumber = '—';
+      int rent = 0;
+
+      // Fetch room doc if we have the full path
+      if (hostelId != null && pgId != null && floorId != null && roomId != null) {
+        try {
+          final roomSnap = await FirebaseFirestore.instance
+              .collection('hostels').doc(hostelId)
+              .collection('pgs').doc(pgId)
+              .collection('floors').doc(floorId)
+              .collection('rooms').doc(roomId)
+              .get();
+          if (roomSnap.exists) {
+            final rd = roomSnap.data()!;
+            roomNumber = (rd['roomNumber'] ?? rd['name'] ?? roomId).toString();
+            rent = _toInt(rd['rentPerBed'] ?? rd['monthlyFee'] ?? 0);
+          }
+        } catch (_) {}
+      }
+
+      // Calculate next due date
+      final allocTs = alloc?['allocatedAt'] as Timestamp?;
+      int daysLeft = 30;
+      if (allocTs != null) {
+        final allocDate = allocTs.toDate();
+        final dueDay = allocDate.day.clamp(1, 28);
+        var nextDue = DateTime(now.year, now.month, dueDay);
+        if (nextDue.isBefore(now) || nextDue.isAtSameMomentAs(now)) {
+          nextDue = DateTime(now.year, now.month + 1, dueDay);
+        }
+        daysLeft = nextDue.difference(now).inDays;
+      }
+
+      items.add(_DueItem(name: name, roomNumber: roomNumber, rent: rent, daysLeft: daysLeft, residentId: doc.id));
+    }
+
+    items.sort((a, b) => a.daysLeft.compareTo(b.daysLeft));
+
+    if (mounted) {
+      setState(() {
+        _resolvedItems = items.take(5).toList();
+        _resolved = true;
+      });
+    }
+  }
+
+  int _toInt(dynamic v) => v is int ? v : int.tryParse('$v') ?? 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('residents')
+          .where('adminId', isEqualTo: widget.adminId)
+          .where('isAllocated', isEqualTo: true)
+          .snapshots(),
+      builder: (ctx, snap) {
+        if (!snap.hasData) return const ShimmerBox(width: double.infinity, height: 120);
+        final docs = snap.data!.docs;
+        if (docs.isEmpty) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Center(child: Text('No allocated residents', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13, fontFamily: 'Inter'))),
           );
         }
-        return _buildStatsGrid(
-          context: context,
-          pgDocs: pgDocs,
-          residentsStream: residentsStream,
-          complaintsStream: complaintsStream,
-          paymentsStream: paymentsStream,
-        );
+
+        // Re-resolve when residents change
+        final key = docs.map((d) => d.id).join(',');
+        if (key != _lastKey) {
+          _lastKey = key;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _resolveRoomData(docs);
+          });
+        }
+
+        if (!_resolved) return const ShimmerBox(width: double.infinity, height: 120);
+
+        return Column(children: _resolvedItems.map((item) => _FeeDueTile(item: item)).toList());
       },
     );
   }
 }
 
-Widget _buildStatsGrid({
-  required BuildContext context,
-  required List<QueryDocumentSnapshot> pgDocs,
-  required Stream<QuerySnapshot> residentsStream,
-  required Stream<QuerySnapshot> complaintsStream,
-  required Stream<QuerySnapshot> paymentsStream,
-}) {
-  int totalBeds = 0;
-  int availableBeds = 0;
-  for (final doc in pgDocs) {
-    final data = doc.data() as Map<String, dynamic>;
-    final tbRaw = data['totalBeds'];
-    final abRaw = data['availableBeds'];
-    final tb = tbRaw is int ? tbRaw : int.tryParse('$tbRaw') ?? 0;
-    final ab = abRaw is int ? abRaw : int.tryParse('$abRaw') ?? 0;
-    totalBeds += tb;
-    availableBeds += ab;
-  }
-
-  return StreamBuilder<QuerySnapshot>(
-    stream: residentsStream,
-    builder: (context, residentsSnap) {
-      final residentsDocs = residentsSnap.data?.docs ?? [];
-      final totalResidents = residentsDocs.length;
-      final allocatedResidents = residentsDocs.where((doc) {
-        final data = doc.data() as Map<String, dynamic>;
-        return data['isAllocated'] == true;
-      }).length;
-
-      final actualOccupiedBeds = (totalBeds - availableBeds).clamp(
-        0,
-        totalBeds,
-      );
-      final occupancyPercentage = totalBeds > 0
-          ? (actualOccupiedBeds / totalBeds * 100).round()
-          : 0;
-
-      return StreamBuilder<QuerySnapshot>(
-        stream: complaintsStream,
-        builder: (context, complaintsSnap) {
-          final complaintsDocs = complaintsSnap.data?.docs ?? [];
-          final openComplaints = complaintsDocs.where((doc) {
-            final data = doc.data() as Map<String, dynamic>;
-            final status = data['status']?.toString().toLowerCase() ?? '';
-            return status != 'resolved' && status != 'closed';
-          }).length;
-
-          return StreamBuilder<QuerySnapshot>(
-            stream: paymentsStream,
-            builder: (context, paymentsSnap) {
-              final paymentDocs = paymentsSnap.data?.docs ?? [];
-              final pendingFromPayments = _sumPendingFeesFromPayments(
-                paymentDocs,
-              );
-              final pendingFromResidents = _sumPendingFeesFromResidents(
-                residentsDocs,
-              );
-
-              final pendingTotal = pendingFromPayments > 0
-                  ? pendingFromPayments
-                  : pendingFromResidents;
-
-              final cards = [
-                _StatCard(
-                  icon: Icons.people,
-                  title: 'Total Residents',
-                  value: totalResidents.toString(),
-                  change: '+$allocatedResidents allocated',
-                  changeType: 'positive',
-                ),
-                _StatCard(
-                  icon: Icons.bed,
-                  title: 'Available Beds',
-                  value: availableBeds.toString(),
-                  showProgress: true,
-                  progressValue: totalBeds == 0
-                      ? 0
-                      : actualOccupiedBeds / totalBeds,
-                  change: 'Out of $totalBeds total',
-                  occupancy: occupancyPercentage,
-                ),
-                _StatCard(
-                  icon: Icons.currency_rupee,
-                  title: 'Pending Fees',
-                  value: '₹$pendingTotal',
-                  change: '${_countPendingResidents(paymentDocs)} residents',
-                  changeType: 'warning',
-                ),
-                _StatCard(
-                  icon: Icons.notifications_active,
-                  title: 'Open Complaints',
-                  value: openComplaints.toString(),
-                  change:
-                      '${complaintsDocs.where((c) {
-                        final data = c.data() as Map<String, dynamic>;
-                        final createdAt = data['createdAt'] as Timestamp?;
-                        if (createdAt == null) return false;
-                        final now = DateTime.now();
-                        final created = createdAt.toDate();
-                        return now.difference(created).inDays == 0;
-                      }).length} new today',
-                  changeType: 'warning',
-                ),
-              ];
-
-              return LayoutBuilder(
-                builder: (context, constraints) {
-                  final width = constraints.maxWidth;
-                  final crossAxisCount = width >= 1100
-                      ? 4
-                      : width >= 760
-                      ? 2
-                      : 1;
-                  return GridView.count(
-                    crossAxisCount: crossAxisCount,
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    crossAxisSpacing: 16,
-                    mainAxisSpacing: 16,
-                    childAspectRatio: 2.7,
-                    children: cards,
-                  );
-                },
-              );
-            },
-          );
-        },
-      );
-    },
-  );
+class _DueItem {
+  final String name, roomNumber, residentId;
+  int rent;
+  final int daysLeft;
+  _DueItem({required this.name, required this.roomNumber, required this.rent, required this.daysLeft, required this.residentId});
 }
 
-class _StatCard extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String value;
-  final bool showProgress;
-  final double? progressValue;
-  final String? change;
-  final String? changeType; // 'positive', 'warning', 'neutral'
-  final int? occupancy;
-
-  const _StatCard({
-    required this.icon,
-    required this.title,
-    required this.value,
-    this.showProgress = false,
-    this.progressValue,
-    this.change,
-    this.changeType,
-    this.occupancy,
-  });
+class _FeeDueTile extends StatelessWidget {
+  final _DueItem item;
+  const _FeeDueTile({required this.item});
 
   @override
   Widget build(BuildContext context) {
-    // Icon colors based on card type
-    Color iconColor;
-    Color iconBgColor;
-    if (title == 'Total Residents') {
-      iconColor = const Color(0xFF6366F1);
-      iconBgColor = const Color(0xFF6366F1).withOpacity(0.1);
-    } else if (title == 'Available Beds') {
-      iconColor = const Color(0xFF14B8A6);
-      iconBgColor = const Color(0xFF14B8A6).withOpacity(0.1);
-    } else if (title == 'Pending Fees') {
-      iconColor = const Color(0xFFF97316);
-      iconBgColor = const Color(0xFFF97316).withOpacity(0.1);
+    Color badgeColor;
+    Color badgeBg;
+    if (item.daysLeft <= 3) {
+      badgeColor = const Color(0xFFDC2626);
+      badgeBg = const Color(0xFFFEE2E2);
+    } else if (item.daysLeft <= 5) {
+      badgeColor = const Color(0xFFF97316);
+      badgeBg = const Color(0xFFFFF7ED);
     } else {
-      iconColor = const Color(0xFFEF4444);
-      iconBgColor = const Color(0xFFEF4444).withOpacity(0.1);
+      badgeColor = const Color(0xFF64748B);
+      badgeBg = const Color(0xFFF1F5F9);
     }
 
     return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Theme.of(context).dividerColor, width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFFF1F5F9)))),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(item.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14, fontFamily: 'Inter', letterSpacing: -0.1)),
+                const SizedBox(height: 2),
+                Text('Room ${item.roomNumber}', style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8), fontFamily: 'Inter')),
+              ],
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(item.rent > 0 ? '₹${item.rent}' : '—', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15, fontFamily: 'Inter')),
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(color: badgeBg, borderRadius: BorderRadius.circular(6)),
+                child: Text(
+                  '${item.daysLeft} day${item.daysLeft == 1 ? '' : 's'} left',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: badgeColor, fontFamily: 'Inter'),
+                ),
+              ),
+            ],
           ),
         ],
-      ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final isCompact = constraints.maxHeight < 120;
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Theme.of(context).textTheme.bodySmall?.color,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          value,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        if (!isCompact && change != null) ...[
-                          const SizedBox(height: 2),
-                          Text(
-                            change!,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 10,
-                              color: changeType == 'positive'
-                                  ? const Color(0xFF14B8A6)
-                                  : changeType == 'warning'
-                                  ? const Color(0xFFF97316)
-                                  : Theme.of(
-                                      context,
-                                    ).textTheme.bodySmall?.color,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                  Container(
-                    width: 34,
-                    height: 34,
-                    decoration: BoxDecoration(
-                      color: iconBgColor,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(icon, color: iconColor, size: 18),
-                  ),
-                ],
-              ),
-              if (showProgress && progressValue != null) ...[
-                SizedBox(height: isCompact ? 4 : 6),
-                if (!isCompact)
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Occupancy Rate',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: Theme.of(context).textTheme.bodySmall?.color,
-                        ),
-                      ),
-                      if (occupancy != null)
-                        Text(
-                          '$occupancy%',
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                            color: Theme.of(
-                              context,
-                            ).textTheme.bodyMedium?.color,
-                          ),
-                        ),
-                    ],
-                  ),
-                if (!isCompact) const SizedBox(height: 3),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: progressValue!,
-                    minHeight: isCompact ? 3 : 4,
-                    backgroundColor: Theme.of(context).dividerColor,
-                    valueColor: AlwaysStoppedAnimation(iconColor),
-                  ),
-                ),
-              ],
-            ],
-          );
-        },
       ),
     );
   }
 }
 
-/* =========================================================
-   QUICK ACTIONS
-========================================================= */
+// ─────────────────────────────────────────────
+// EXPANDABLE FAB
+// ─────────────────────────────────────────────
+class _ExpandableFab extends StatefulWidget {
+  final String adminId;
+  final bool isOpen;
+  final VoidCallback onToggle;
+  const _ExpandableFab({required this.adminId, required this.isOpen, required this.onToggle});
 
-Widget _QuickActions(BuildContext context, String adminId) {
-  return Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      const Text('Quick Actions', style: AppTextStyles.h3),
-      const SizedBox(height: 14),
-      Wrap(
-        spacing: 16,
-        runSpacing: 16,
-        children: [
-          _ActionButton(
-            label: 'Manage Hostels',
-            icon: Icons.business,
-            gradient: const [Color(0xFF7C3AED), Color(0xFFEC4899)],
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => HostelManagementScreen(adminId: adminId),
-                ),
-              );
-            },
-          ),
-          _ActionButton(
-            label: 'Add Resident',
-            icon: Icons.person_add,
-            gradient: const [Color(0xFF6D28D9), Color(0xFFA855F7)],
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => AddResidentScreen(adminId: adminId),
-                ),
-              );
-            },
-          ),
-          _ActionButton(
-            label: 'Allocate Room',
-            icon: Icons.meeting_room,
-            gradient: [Color(0xFF0D9488), Color(0xFF06B6D4)],
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => AllocateResidentScreen(adminId: adminId),
-                ),
-              );
-            },
-          ),
-          _ActionButton(
-            label: 'Send Notice',
-            icon: Icons.notifications,
-            gradient: const [Color(0xFF9333EA), Color(0xFFEC4899)],
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const SendNoticeScreen()),
-              );
-            },
-          ),
-        ],
-      ),
-    ],
-  );
+  @override
+  State<_ExpandableFab> createState() => _ExpandableFabState();
 }
 
-/* =========================================================
-   SEND NOTICE (UI ONLY)
-========================================================= */
+class _ExpandableFabState extends State<_ExpandableFab> with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
 
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 220));
+  }
+
+  @override
+  void didUpdateWidget(_ExpandableFab old) {
+    super.didUpdateWidget(old);
+    widget.isOpen ? _ctrl.forward() : _ctrl.reverse();
+  }
+
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  void _navigate(Widget screen) {
+    widget.onToggle();
+    Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final actions = [
+      _FabAction(label: 'Manage Hostels', icon: Icons.apartment_rounded, gradient: AdminGradients.primary, onTap: () => _navigate(HostelManagementScreen(adminId: widget.adminId))),
+      _FabAction(label: 'Add Resident', icon: Icons.person_add_rounded, gradient: AdminGradients.indigo, onTap: () => _navigate(AddResidentScreen(adminId: widget.adminId))),
+      _FabAction(label: 'Allocate Resident', icon: Icons.bed_rounded, gradient: AdminGradients.teal, onTap: () => _navigate(AllocateResidentScreen(adminId: widget.adminId))),
+      _FabAction(label: 'Send Notice', icon: Icons.notifications_rounded, gradient: AdminGradients.pink, onTap: () => _navigate(const SendNoticeScreen())),
+    ];
+
+    return Positioned(
+      right: 20, bottom: 24,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+        ...List.generate(actions.length, (i) {
+          final delay = i * 0.1;
+          return AnimatedBuilder(
+            animation: _ctrl,
+            builder: (_, child) {
+              final v = (_ctrl.value - delay).clamp(0.0, 1.0);
+              return Transform.translate(
+                offset: Offset(0, 10 * (1 - v)),
+                child: Opacity(opacity: v, child: child),
+              );
+            },
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _FabActionButton(action: actions[i]),
+            ),
+          );
+        }).reversed.toList(),
+        const SizedBox(height: 4),
+        GestureDetector(
+          onTap: widget.onToggle,
+          child: Container(
+            width: 56, height: 56,
+            decoration: BoxDecoration(gradient: AdminGradients.primary, shape: BoxShape.circle, boxShadow: AdminShadows.fab),
+            child: AnimatedBuilder(
+              animation: _ctrl,
+              builder: (_, __) => Transform.rotate(
+                angle: _ctrl.value * 0.785,
+                child: Icon(widget.isOpen ? Icons.close_rounded : Icons.add_rounded, color: Colors.white, size: 26),
+              ),
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+class _FabAction {
+  final String label;
+  final IconData icon;
+  final LinearGradient gradient;
+  final VoidCallback onTap;
+  const _FabAction({required this.label, required this.icon, required this.gradient, required this.onTap});
+}
+
+class _FabActionButton extends StatelessWidget {
+  final _FabAction action;
+  const _FabActionButton({required this.action});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: action.onTap,
+      child: Container(
+        height: 46,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(gradient: action.gradient, borderRadius: BorderRadius.circular(24), boxShadow: AdminShadows.card),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(action.icon, color: Colors.white, size: 18),
+          const SizedBox(width: 8),
+          Text(action.label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13, fontFamily: 'Inter')),
+        ]),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// SEND NOTICE SCREEN (preserved from original)
+// ─────────────────────────────────────────────
 class SendNoticeScreen extends StatefulWidget {
   final VoidCallback? onBack;
-
   const SendNoticeScreen({super.key, this.onBack});
 
   @override
@@ -655,15 +889,8 @@ class SendNoticeScreen extends StatefulWidget {
 }
 
 class _PgOption {
-  final String pgId;
-  final String label;
-  final String hostelId;
-
-  const _PgOption({
-    required this.pgId,
-    required this.label,
-    required this.hostelId,
-  });
+  final String pgId, label, hostelId;
+  const _PgOption({required this.pgId, required this.label, required this.hostelId});
 }
 
 class _SendNoticeScreenState extends State<SendNoticeScreen> {
@@ -678,61 +905,27 @@ class _SendNoticeScreenState extends State<SendNoticeScreen> {
   late final Future<List<_PgOption>> _pgsFuture = _loadPgsForAdmin();
 
   final _noticeTypes = const [
-    {
-      'value': 'general',
-      'label': 'General',
-      'description': 'General announcements and updates',
-      'color': Color(0xFF4F46E5),
-    },
-    {
-      'value': 'maintenance',
-      'label': 'Maintenance',
-      'description': 'Facility maintenance schedules',
-      'color': Color(0xFF7C3AED),
-    },
-    {
-      'value': 'payment',
-      'label': 'Payment',
-      'description': 'Fee reminders and payment notices',
-      'color': Color(0xFFEA580C),
-    },
-    {
-      'value': 'warning',
-      'label': 'Warning',
-      'description': 'Important warnings and alerts',
-      'color': Color(0xFFDC2626),
-    },
+    {'value': 'general', 'label': 'General', 'description': 'General announcements and updates', 'color': Color(0xFF4F46E5)},
+    {'value': 'maintenance', 'label': 'Maintenance', 'description': 'Facility maintenance schedules', 'color': Color(0xFF7C3AED)},
+    {'value': 'payment', 'label': 'Payment', 'description': 'Fee reminders and payment notices', 'color': Color(0xFFEA580C)},
+    {'value': 'warning', 'label': 'Warning', 'description': 'Important warnings and alerts', 'color': Color(0xFFDC2626)},
   ];
 
-  bool get _isFormValid {
-    if (_titleController.text.trim().isEmpty) return false;
-    if (_messageController.text.trim().isEmpty) return false;
-    if (_noticeType.isEmpty) return false;
-    if (_scope.isEmpty) return false;
-    if (_scope == 'PG' && _selectedPgId.isEmpty) return false;
-    if (_scope == 'RESIDENT' && _selectedResidentId.isEmpty) {
-      return false;
-    }
-    return true;
-  }
+  bool get _isFormValid =>
+      _titleController.text.trim().isNotEmpty &&
+      _messageController.text.trim().isNotEmpty &&
+      _noticeType.isNotEmpty &&
+      _scope.isNotEmpty &&
+      !(_scope == 'PG' && _selectedPgId.isEmpty) &&
+      !(_scope == 'RESIDENT' && _selectedResidentId.isEmpty);
 
   @override
-  void dispose() {
-    _titleController.dispose();
-    _messageController.dispose();
-    super.dispose();
-  }
+  void dispose() { _titleController.dispose(); _messageController.dispose(); super.dispose(); }
 
   Future<void> _handleSubmit() async {
     if (!_isFormValid) return;
     final adminUid = FirebaseAuth.instance.currentUser?.uid;
-    if (adminUid == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Failed to publish notice')));
-      return;
-    }
-
+    if (adminUid == null) return;
     try {
       final pgIds = <String>[];
       if (_scope == 'ALL') {
@@ -740,11 +933,20 @@ class _SendNoticeScreenState extends State<SendNoticeScreen> {
         pgIds.addAll(pgs.map((p) => p.pgId));
       } else if (_scope == 'PG') {
         pgIds.add(_selectedPgId);
+      } else if (_scope == 'RESIDENT' && _selectedResidentId.isNotEmpty) {
+        try {
+          final rDoc = await FirebaseFirestore.instance.collection('residents').doc(_selectedResidentId).get();
+          if (rDoc.exists) {
+            final rData = rDoc.data()!;
+            final alloc = rData['allocationDetails'];
+            final pgId = alloc is Map ? alloc['pgId'] : rData['pgId'];
+            if (pgId != null && pgId.toString().isNotEmpty) pgIds.add(pgId.toString());
+          }
+        } catch (e) { debugPrint('pgId fetch: $e'); }
       }
-
-      final docRef = FirebaseFirestore.instance.collection('notices').doc();
-      final payload = <String, dynamic>{
-        'noticeId': docRef.id,
+      final ref = FirebaseFirestore.instance.collection('notices').doc();
+      await ref.set({
+        'noticeId': ref.id,
         'title': _titleController.text.trim(),
         'message': _messageController.text.trim(),
         'noticeType': _noticeTypeLabel(_noticeType),
@@ -753,1669 +955,177 @@ class _SendNoticeScreenState extends State<SendNoticeScreen> {
         'createdByAdminId': adminUid,
         'hostelOwnerId': adminUid,
         'pgIds': pgIds,
-        'residentIds': _scope == 'RESIDENT'
-            ? [_selectedResidentId]
-            : <String>[],
+        'residentIds': _scope == 'RESIDENT' ? [_selectedResidentId] : <String>[],
         'isActive': true,
         'createdAt': FieldValue.serverTimestamp(),
-      };
-
-      await docRef.set(payload);
-
-      debugPrint('Notice published: ${docRef.id}');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Notice published successfully')),
-      );
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Notice published successfully')));
     } catch (_) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Failed to publish notice')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to publish notice')));
     }
   }
 
   String _noticeTypeLabel(String raw) {
     switch (raw.toLowerCase()) {
-      case 'general':
-        return 'General';
-      case 'maintenance':
-        return 'Maintenance';
-      case 'payment':
-        return 'Payment';
-      case 'warning':
-        return 'Warning';
-      default:
-        return raw;
+      case 'general': return 'General';
+      case 'maintenance': return 'Maintenance';
+      case 'payment': return 'Payment';
+      case 'warning': return 'Warning';
+      default: return raw;
     }
   }
 
   Future<List<_PgOption>> _loadPgsForAdmin() async {
     final adminUid = FirebaseAuth.instance.currentUser?.uid;
     if (adminUid == null) return [];
-
-    final hostelsByAdmin = await FirebaseFirestore.instance
-        .collection('hostels')
-        .where('adminId', isEqualTo: adminUid)
-        .get();
-    final hostelsByOwner = await FirebaseFirestore.instance
-        .collection('hostels')
-        .where('ownerId', isEqualTo: adminUid)
-        .get();
-
+    final byAdmin = await FirebaseFirestore.instance.collection('hostels').where('adminId', isEqualTo: adminUid).get();
+    final byOwner = await FirebaseFirestore.instance.collection('hostels').where('ownerId', isEqualTo: adminUid).get();
     final hostels = <String, QueryDocumentSnapshot>{};
-    for (final doc in hostelsByAdmin.docs) {
-      hostels[doc.id] = doc;
-    }
-    for (final doc in hostelsByOwner.docs) {
-      hostels[doc.id] = doc;
-    }
-
+    for (final d in byAdmin.docs) hostels[d.id] = d;
+    for (final d in byOwner.docs) hostels[d.id] = d;
     final pgs = <_PgOption>[];
     for (final entry in hostels.entries) {
-      final hostelId = entry.key;
-      final hostelData = entry.value.data() as Map<String, dynamic>;
-      final hostelName =
-          (hostelData['name'] ?? hostelData['hostelName'] ?? 'Hostel')
-              .toString();
-
-      final pgSnap = await FirebaseFirestore.instance
-          .collection('hostels')
-          .doc(hostelId)
-          .collection('pgs')
-          .get();
-      for (final pgDoc in pgSnap.docs) {
-        final pgData = pgDoc.data();
-        final pgName = (pgData['name'] ?? pgData['pgName'] ?? 'PG').toString();
-        pgs.add(
-          _PgOption(
-            pgId: pgDoc.id,
-            hostelId: hostelId,
-            label: '$pgName • $hostelName',
-          ),
-        );
+      final hData = entry.value.data() as Map<String, dynamic>;
+      final hName = (hData['name'] ?? 'Hostel').toString();
+      final pgSnap = await FirebaseFirestore.instance.collection('hostels').doc(entry.key).collection('pgs').get();
+      for (final p in pgSnap.docs) {
+        final pData = p.data();
+        pgs.add(_PgOption(pgId: p.id, hostelId: entry.key, label: '${(pData['name'] ?? pData['pgName'] ?? 'PG')} • $hName'));
       }
     }
-
     pgs.sort((a, b) => a.label.compareTo(b.label));
     return pgs;
   }
 
   void _handleCancel() {
-    if (widget.onBack != null) {
-      widget.onBack!();
-      return;
-    }
+    if (widget.onBack != null) { widget.onBack!(); return; }
     Navigator.maybePop(context);
   }
 
   @override
   Widget build(BuildContext context) {
-    Map<String, Object?>? selectedType;
-    for (final item in _noticeTypes) {
-      if (item['value'] == _noticeType) {
-        selectedType = item;
-        break;
-      }
-    }
-
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7FB),
-      body: SafeArea(
-        child: Column(
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                border: Border(
-                  bottom: BorderSide(color: Theme.of(context).dividerColor),
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.04),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
+      backgroundColor: const Color(0xFFF4F6FB),
+      body: SafeArea(child: Column(children: [
+        AdminPageHeader(
+          title: 'Send Notice',
+          subtitle: 'Dashboard → Communication → Send Notice',
+          icon: Icons.notifications_rounded,
+          iconGradient: AdminGradients.indigo,
+          onBack: _handleCancel,
+        ),
+        Expanded(child: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: Column(children: [
+            AdminSectionCard(
+              title: 'Notice Details', icon: Icons.description_rounded,
+              headerGradient: AdminGradients.headerLight, iconColor: AdminColors.primary,
+              child: Column(children: [
+                AdminTextField(label: 'Notice Title *', hint: 'e.g., Holiday Announcement', controller: _titleController, onChanged: (_) => setState(() {})),
+                const SizedBox(height: 16),
+                AdminTextField(label: 'Notice Description *', hint: 'Enter your notice message here...', controller: _messageController, maxLines: 5, onChanged: (_) => setState(() {})),
+              ]),
+            ),
+            const SizedBox(height: 16),
+            AdminSectionCard(
+              title: 'Notice Type', icon: Icons.local_offer_rounded,
+              headerGradient: AdminGradients.headerPurple, iconColor: AdminColors.primary,
+              child: Wrap(
+                spacing: 12, runSpacing: 12,
+                children: _noticeTypes.map((t) {
+                  final isSelected = _noticeType == t['value'];
+                  final color = t['color'] as Color;
+                  return GestureDetector(
+                    onTap: () => setState(() => _noticeType = t['value'] as String),
+                    child: Container(
+                      width: 200, padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: isSelected ? color : const Color(0xFFE5E7EB), width: isSelected ? 2 : 1),
+                        color: isSelected ? color.withOpacity(0.08) : Colors.white,
+                      ),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Row(children: [
+                          Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+                          const SizedBox(width: 8),
+                          Text(t['label'] as String, style: TextStyle(fontWeight: FontWeight.w600, color: isSelected ? color : AdminColors.textPrimary, fontFamily: 'Inter')),
+                        ]),
+                        const SizedBox(height: 6),
+                        Text(t['description'] as String, style: const TextStyle(fontSize: 12, color: AdminColors.textSecondary, fontFamily: 'Inter')),
+                      ]),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+            const SizedBox(height: 16),
+            AdminSectionCard(
+              title: 'Audience Selection', icon: Icons.people_rounded,
+              headerGradient: AdminGradients.headerTeal, iconColor: AdminColors.secondary,
+              child: Column(children: [
+                for (final s in [('ALL', 'All Residents', 'Send to every resident'), ('PG', 'Specific PG', 'Send to one PG'), ('RESIDENT', 'Specific Resident', 'Send to one person')])
+                  RadioListTile<String>(
+                    value: s.$1, groupValue: _scope,
+                    onChanged: (v) => setState(() { _scope = v ?? ''; _selectedPgId = ''; _selectedResidentId = ''; _selectedResidentLabel = ''; }),
+                    title: Text(s.$2, style: const TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w500)),
+                    subtitle: Text(s.$3, style: const TextStyle(fontSize: 12, fontFamily: 'Inter')),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                if (_scope == 'PG') ...[
+                  const SizedBox(height: 8),
+                  FutureBuilder<List<_PgOption>>(
+                    future: _pgsFuture,
+                    builder: (_, snap) => DropdownButtonFormField<String>(
+                      value: _selectedPgId.isEmpty ? null : _selectedPgId,
+                      decoration: InputDecoration(border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), hintText: 'Select PG', filled: true, fillColor: const Color(0xFFF8F9FC)),
+                      items: (snap.data ?? []).map((pg) => DropdownMenuItem(value: pg.pgId, child: Text(pg.label))).toList(),
+                      onChanged: (v) => setState(() => _selectedPgId = v ?? ''),
+                    ),
                   ),
                 ],
-              ),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back),
-                    onPressed: _handleCancel,
-                  ),
-                  Container(
-                    height: 44,
-                    width: 44,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF4F46E5), Color(0xFF7C3AED)],
-                      ),
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [
-                        BoxShadow(
-                          color: const Color(0xFF4F46E5).withOpacity(0.25),
-                          blurRadius: 10,
-                          offset: const Offset(0, 6),
-                        ),
-                      ],
-                    ),
-                    child: const Icon(
-                      Icons.description_outlined,
-                      color: Colors.white,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Send Notice',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        SizedBox(height: 2),
-                        Text(
-                          'Dashboard → Communication → Send Notice',
-                          style: TextStyle(fontSize: 12, color: Colors.black54),
-                        ),
-                      ],
+                if (_scope == 'RESIDENT') ...[
+                  const SizedBox(height: 8),
+                  StreamBuilder<QuerySnapshot>(
+                    stream: FirebaseFirestore.instance.collection('residents').where('adminId', isEqualTo: FirebaseAuth.instance.currentUser?.uid).snapshots(),
+                    builder: (_, snap) => DropdownButtonFormField<String>(
+                      value: _selectedResidentId.isEmpty ? null : _selectedResidentId,
+                      decoration: InputDecoration(border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), hintText: 'Select resident', filled: true, fillColor: const Color(0xFFF8F9FC)),
+                      items: (snap.data?.docs ?? []).map((doc) {
+                        final d = doc.data() as Map<String, dynamic>;
+                        final label = (d['name'] ?? d['fullName'] ?? d['email'] ?? 'Resident').toString();
+                        return DropdownMenuItem(value: doc.id, child: Text(label));
+                      }).toList(),
+                      onChanged: (v) {
+                        final docs = snap.data?.docs ?? [];
+                        final sel = docs.where((d) => d.id == v).toList();
+                        String lbl = '';
+                        if (sel.isNotEmpty) {
+                          final d = sel.first.data() as Map<String, dynamic>;
+                          lbl = (d['name'] ?? d['fullName'] ?? d['email'] ?? '').toString();
+                        }
+                        setState(() { _selectedResidentId = v ?? ''; _selectedResidentLabel = lbl; });
+                      },
                     ),
                   ),
                 ],
-              ),
+              ]),
             ),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  children: [
-                    Card(
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(16),
-                            decoration: const BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [Color(0xFFEFF1FF), Color(0xFFF5EEFF)],
-                              ),
-                              borderRadius: BorderRadius.vertical(
-                                top: Radius.circular(16),
-                              ),
-                            ),
-                            child: const Row(
-                              children: [
-                                Icon(
-                                  Icons.description,
-                                  color: Color(0xFF4F46E5),
-                                ),
-                                SizedBox(width: 8),
-                                Text(
-                                  'Notice Details',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.all(20),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Notice Title *',
-                                  style: TextStyle(fontSize: 12),
-                                ),
-                                const SizedBox(height: 8),
-                                TextField(
-                                  controller: _titleController,
-                                  decoration: const InputDecoration(
-                                    hintText:
-                                        'Enter notice title (e.g., Holiday Announcement)',
-                                    border: OutlineInputBorder(),
-                                  ),
-                                  onChanged: (_) => setState(() {}),
-                                ),
-                                const SizedBox(height: 20),
-                                const Text(
-                                  'Notice Description *',
-                                  style: TextStyle(fontSize: 12),
-                                ),
-                                const SizedBox(height: 8),
-                                TextField(
-                                  controller: _messageController,
-                                  maxLines: 6,
-                                  decoration: const InputDecoration(
-                                    hintText:
-                                        'Enter your notice message here...',
-                                    border: OutlineInputBorder(),
-                                  ),
-                                  onChanged: (_) => setState(() {}),
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  '${_messageController.text.length} characters',
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    color: Colors.black54,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    Card(
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(16),
-                            decoration: const BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [Color(0xFFF4EDFF), Color(0xFFFFF0F8)],
-                              ),
-                              borderRadius: BorderRadius.vertical(
-                                top: Radius.circular(16),
-                              ),
-                            ),
-                            child: const Row(
-                              children: [
-                                Icon(
-                                  Icons.local_offer,
-                                  color: Color(0xFF7C3AED),
-                                ),
-                                SizedBox(width: 8),
-                                Text(
-                                  'Notice Type',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.all(20),
-                            child: Column(
-                              children: [
-                                Wrap(
-                                  spacing: 12,
-                                  runSpacing: 12,
-                                  children: _noticeTypes.map((type) {
-                                    final isSelected =
-                                        _noticeType == type['value'];
-                                    final typeColor = type['color'] as Color;
-                                    return InkWell(
-                                      onTap: () {
-                                        setState(() {
-                                          _noticeType = type['value'] as String;
-                                        });
-                                      },
-                                      borderRadius: BorderRadius.circular(14),
-                                      child: Container(
-                                        width: 240,
-                                        padding: const EdgeInsets.all(14),
-                                        decoration: BoxDecoration(
-                                          borderRadius: BorderRadius.circular(
-                                            14,
-                                          ),
-                                          border: Border.all(
-                                            color: isSelected
-                                                ? typeColor
-                                                : Theme.of(
-                                                    context,
-                                                  ).dividerColor,
-                                            width: 2,
-                                          ),
-                                          color: isSelected
-                                              ? typeColor.withOpacity(0.08)
-                                              : Theme.of(context).cardColor,
-                                          boxShadow: isSelected
-                                              ? [
-                                                  BoxShadow(
-                                                    color: typeColor
-                                                        .withOpacity(0.15),
-                                                    blurRadius: 12,
-                                                    offset: const Offset(0, 6),
-                                                  ),
-                                                ]
-                                              : [],
-                                        ),
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Row(
-                                              children: [
-                                                Container(
-                                                  height: 10,
-                                                  width: 10,
-                                                  decoration: BoxDecoration(
-                                                    color: typeColor,
-                                                    shape: BoxShape.circle,
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 8),
-                                                Text(
-                                                  type['label'] as String,
-                                                  style: TextStyle(
-                                                    fontWeight: FontWeight.w600,
-                                                    color: isSelected
-                                                        ? typeColor
-                                                        : Colors.black87,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                            const SizedBox(height: 8),
-                                            Text(
-                                              type['description'] as String,
-                                              style: const TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.black54,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    );
-                                  }).toList(),
-                                ),
-                                if (selectedType != null) ...[
-                                  const SizedBox(height: 16),
-                                  Container(
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      gradient: const LinearGradient(
-                                        colors: [
-                                          Color(0xFFEFF1FF),
-                                          Color(0xFFF5EEFF),
-                                        ],
-                                      ),
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(
-                                        color: const Color(
-                                          0xFF4F46E5,
-                                        ).withOpacity(0.2),
-                                      ),
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        const Text(
-                                          'Notice will be marked as:',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: Colors.black87,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 10,
-                                            vertical: 4,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color:
-                                                selectedType['color'] as Color,
-                                            borderRadius: BorderRadius.circular(
-                                              12,
-                                            ),
-                                          ),
-                                          child: Text(
-                                            selectedType['label'] as String,
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 12,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    Card(
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(16),
-                            decoration: const BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [Color(0xFFEAFBF7), Color(0xFFE6F7FF)],
-                              ),
-                              borderRadius: BorderRadius.vertical(
-                                top: Radius.circular(16),
-                              ),
-                            ),
-                            child: const Row(
-                              children: [
-                                Icon(Icons.people, color: Color(0xFF0F766E)),
-                                SizedBox(width: 8),
-                                Text(
-                                  'Audience Selection',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.all(20),
-                            child: Column(
-                              children: [
-                                RadioListTile<String>(
-                                  value: 'ALL',
-                                  groupValue: _scope,
-                                  onChanged: (value) {
-                                    setState(() {
-                                      _scope = value ?? '';
-                                      _selectedPgId = '';
-                                      _selectedResidentId = '';
-                                      _selectedResidentLabel = '';
-                                    });
-                                  },
-                                  title: const Text('All Residents'),
-                                  subtitle: const Text(
-                                    'Send to every resident',
-                                  ),
-                                  secondary: const Icon(Icons.groups),
-                                ),
-                                RadioListTile<String>(
-                                  value: 'PG',
-                                  groupValue: _scope,
-                                  onChanged: (value) {
-                                    setState(() {
-                                      _scope = value ?? '';
-                                      _selectedPgId = '';
-                                      _selectedResidentId = '';
-                                      _selectedResidentLabel = '';
-                                    });
-                                  },
-                                  title: const Text('Specific PG'),
-                                  subtitle: const Text('Send to one PG'),
-                                  secondary: const Icon(Icons.apartment),
-                                ),
-                                RadioListTile<String>(
-                                  value: 'RESIDENT',
-                                  groupValue: _scope,
-                                  onChanged: (value) {
-                                    setState(() {
-                                      _scope = value ?? '';
-                                      _selectedPgId = '';
-                                      _selectedResidentId = '';
-                                      _selectedResidentLabel = '';
-                                    });
-                                  },
-                                  title: const Text('Specific Resident'),
-                                  subtitle: const Text('Send to one person'),
-                                  secondary: const Icon(Icons.person),
-                                ),
-                                const SizedBox(height: 12),
-                                if (_scope == 'PG') ...[
-                                  const Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: Text(
-                                      'Select PG *',
-                                      style: TextStyle(fontSize: 12),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  FutureBuilder<List<_PgOption>>(
-                                    future: _pgsFuture,
-                                    builder: (context, snap) {
-                                      final items = snap.data ?? [];
-                                      return DropdownButtonFormField<String>(
-                                        value: _selectedPgId.isEmpty
-                                            ? null
-                                            : _selectedPgId,
-                                        decoration: const InputDecoration(
-                                          border: OutlineInputBorder(),
-                                          hintText: 'Select PG',
-                                        ),
-                                        items: items.map((pg) {
-                                          return DropdownMenuItem<String>(
-                                            value: pg.pgId,
-                                            child: Text(pg.label),
-                                          );
-                                        }).toList(),
-                                        onChanged: (value) {
-                                          setState(() {
-                                            _selectedPgId = value ?? '';
-                                          });
-                                        },
-                                      );
-                                    },
-                                  ),
-                                ],
-                                if (_scope == 'RESIDENT') ...[
-                                  const Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: Text(
-                                      'Select Resident *',
-                                      style: TextStyle(fontSize: 12),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  StreamBuilder<QuerySnapshot>(
-                                    stream: FirebaseFirestore.instance
-                                        .collection('residents')
-                                        .where(
-                                          'adminId',
-                                          isEqualTo: FirebaseAuth
-                                              .instance
-                                              .currentUser
-                                              ?.uid,
-                                        )
-                                        .snapshots(),
-                                    builder: (context, snap) {
-                                      final items = snap.data?.docs ?? [];
-                                      return DropdownButtonFormField<String>(
-                                        value: _selectedResidentId.isEmpty
-                                            ? null
-                                            : _selectedResidentId,
-                                        decoration: const InputDecoration(
-                                          border: OutlineInputBorder(),
-                                          hintText: 'Select resident',
-                                        ),
-                                        items: items.map((doc) {
-                                          final data =
-                                              doc.data()
-                                                  as Map<String, dynamic>;
-                                          final label =
-                                              data['name'] ??
-                                              data['fullName'] ??
-                                              data['email'] ??
-                                              'Resident';
-                                          return DropdownMenuItem<String>(
-                                            value: doc.id,
-                                            child: Text(label.toString()),
-                                          );
-                                        }).toList(),
-                                        onChanged: (value) {
-                                          final selected = items
-                                              .where((doc) => doc.id == value)
-                                              .toList();
-                                          String label = '';
-                                          if (selected.isNotEmpty) {
-                                            final data =
-                                                selected.first.data()
-                                                    as Map<String, dynamic>;
-                                            label =
-                                                (data['name'] ??
-                                                        data['fullName'] ??
-                                                        data['email'] ??
-                                                        '')
-                                                    .toString();
-                                          }
-                                          setState(() {
-                                            _selectedResidentId = value ?? '';
-                                            _selectedResidentLabel = label;
-                                          });
-                                        },
-                                      );
-                                    },
-                                  ),
-                                ],
-                                if (_scope.isNotEmpty) ...[
-                                  const SizedBox(height: 16),
-                                  Container(
-                                    width: double.infinity,
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      gradient: const LinearGradient(
-                                        colors: [
-                                          Color(0xFFEAFBF7),
-                                          Color(0xFFE6F7FF),
-                                        ],
-                                      ),
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(
-                                        color: const Color(
-                                          0xFF0F766E,
-                                        ).withOpacity(0.2),
-                                      ),
-                                    ),
-                                    child: Text(
-                                      _scope == 'ALL'
-                                          ? '✓ All residents across your PGs'
-                                          : _scope == 'PG'
-                                          ? _selectedPgId.isEmpty
-                                                ? 'Please select a PG'
-                                                : '✓ Residents in selected PG'
-                                          : _selectedResidentId.isEmpty
-                                          ? 'Please select a resident'
-                                          : '✓ $_selectedResidentLabel',
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        color: Color(0xFF0F766E),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: _handleCancel,
-                            icon: const Icon(Icons.close),
-                            label: const Text('Cancel'),
-                            style: OutlinedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 16),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: _isFormValid ? _handleSubmit : null,
-                            icon: const Icon(Icons.send),
-                            label: const Text('Publish Notice'),
-                            style: ElevatedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 16),
-                              backgroundColor: const Color(0xFF4F46E5),
-                              foregroundColor: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
+            const SizedBox(height: 24),
+            Row(children: [
+              Expanded(child: OutlinedButton.icon(onPressed: _handleCancel, icon: const Icon(Icons.close), label: const Text('Cancel'),
+                style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))))),
+              const SizedBox(width: 16),
+              Expanded(child: ElevatedButton.icon(
+                onPressed: _isFormValid ? _handleSubmit : null,
+                icon: const Icon(Icons.send_rounded), label: const Text('Publish Notice'),
+                style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16), backgroundColor: AdminColors.primary, foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+              )),
+            ]),
+          ]),
+        )),
+      ])),
     );
   }
-}
-
-class _ActionButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final List<Color> gradient;
-  final VoidCallback? onTap;
-
-  const _ActionButton({
-    required this.label,
-    required this.icon,
-    required this.gradient,
-    this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        width: 260,
-        height: 56,
-        decoration: BoxDecoration(
-          gradient: LinearGradient(colors: gradient),
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: _shadow,
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: Colors.white),
-            const SizedBox(width: 10),
-            Text(
-              label,
-              style: AppTextStyles.bodyMedium.copyWith(color: Colors.white),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/* =========================================================
-   MAIN GRID
-========================================================= */
-
-class _MainGrid extends StatelessWidget {
-  final String adminId;
-  const _MainGrid({required this.adminId});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(flex: 2, child: _RecentResidents(adminId: adminId)),
-            const SizedBox(width: 16),
-            Expanded(child: _OccupancyByFloor(adminId: adminId)),
-          ],
-        ),
-        const SizedBox(height: 24),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(child: _RecentActivity(adminId: adminId)),
-            const SizedBox(width: 16),
-            Expanded(child: _UpcomingDues(adminId: adminId)),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-/* =========================================================
-   RECENT RESIDENTS
-========================================================= */
-
-class _RecentResidents extends StatelessWidget {
-  final String adminId;
-  const _RecentResidents({required this.adminId});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(22),
-      decoration: _card(context),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Recent Residents', style: AppTextStyles.h3),
-          const SizedBox(height: 18),
-          StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('residents')
-                .where('adminId', isEqualTo: adminId)
-                .where('isAllocated', isEqualTo: true)
-                .limit(5)
-                .snapshots(),
-
-            builder: (context, snapshot) {
-              if (snapshot.hasError) {
-                debugPrint('RECENT_RESIDENTS_ERROR: ${snapshot.error}');
-                return const Text(
-                  'Recent residents will appear once data is available.',
-                  style: AppTextStyles.bodySmall,
-                );
-              }
-              if (!snapshot.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
-
-              if (snapshot.data!.docs.isEmpty) {
-                return const Text(
-                  'No allocated residents yet',
-                  style: AppTextStyles.bodySmall,
-                );
-              }
-
-              return _residentList(context, snapshot.data!.docs);
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/* =========================================================
-   OCCUPANCY BY FLOOR
-========================================================= */
-
-class _OccupancyByFloor extends StatefulWidget {
-  final String adminId;
-  const _OccupancyByFloor({required this.adminId});
-
-  @override
-  State<_OccupancyByFloor> createState() => _OccupancyByFloorState();
-}
-
-class _OccupancyByFloorState extends State<_OccupancyByFloor> {
-  String? _selectedPgId;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(22),
-      decoration: _card(context),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.trending_up,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              const SizedBox(width: 8),
-              const Text('Occupancy by Floor', style: AppTextStyles.h3),
-            ],
-          ),
-          const SizedBox(height: 14),
-          StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collectionGroup('pgs')
-                .where('adminId', isEqualTo: widget.adminId)
-                .snapshots(),
-            builder: (context, pgsSnap) {
-              if (!pgsSnap.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
-
-              final pgs = pgsSnap.data!.docs;
-              if (pgs.isEmpty) {
-                return StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance
-                      .collectionGroup('pgs')
-                      .where('ownerId', isEqualTo: widget.adminId)
-                      .snapshots(),
-                  builder: (context, fallbackSnap) {
-                    if (!fallbackSnap.hasData) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-                    return _buildPgFloorSection(fallbackSnap.data!.docs);
-                  },
-                );
-              }
-
-              return _buildPgFloorSection(pgs);
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPgFloorSection(List<QueryDocumentSnapshot> pgs) {
-    if (pgs.isEmpty) {
-      return const Text('No floors available', style: AppTextStyles.bodySmall);
-    }
-
-    if (_selectedPgId == null || !pgs.any((pg) => pg.id == _selectedPgId)) {
-      _selectedPgId = pgs.first.id;
-    }
-
-    final selectedPg = pgs.firstWhere(
-      (pg) => pg.id == _selectedPgId,
-      orElse: () => pgs.first,
-    );
-    final pgData = selectedPg.data() as Map<String, dynamic>;
-    final pgLabel = (pgData['name'] ?? pgData['pgName'] ?? 'PG').toString();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        DropdownButtonFormField<String>(
-          value: _selectedPgId,
-          decoration: const InputDecoration(
-            border: OutlineInputBorder(),
-            labelText: 'Select PG',
-            isDense: true,
-          ),
-          items: pgs.map((pg) {
-            final data = pg.data() as Map<String, dynamic>;
-            final label = (data['name'] ?? data['pgName'] ?? 'PG').toString();
-            return DropdownMenuItem(value: pg.id, child: Text(label));
-          }).toList(),
-          onChanged: (value) {
-            setState(() => _selectedPgId = value);
-          },
-        ),
-        const SizedBox(height: 12),
-        Text(pgLabel, style: AppTextStyles.bodySmall),
-        const SizedBox(height: 12),
-        StreamBuilder<QuerySnapshot>(
-          stream: selectedPg.reference
-              .collection('floors')
-              .orderBy('floorIndex')
-              .snapshots(),
-          builder: (context, floorsSnap) {
-            if (!floorsSnap.hasData) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            final floors = floorsSnap.data!.docs;
-            if (floors.isEmpty) {
-              return const Text(
-                'No floors available',
-                style: AppTextStyles.bodySmall,
-              );
-            }
-            return Column(
-              children: floors.map((floor) {
-                final floorData = floor.data() as Map<String, dynamic>;
-                final floorNameRaw = floorData['floorName'];
-                final floorIndex = floorData['floorIndex'];
-                final floorName = (floorNameRaw ?? '').toString().trim().isEmpty
-                    ? 'Floor ${floorIndex ?? ''}'
-                    : floorNameRaw.toString();
-
-                final totalRaw = floorData['totalBeds'];
-                final availRaw = floorData['availableBeds'];
-                final total = totalRaw is int
-                    ? totalRaw
-                    : int.tryParse('$totalRaw') ?? 0;
-                final available = availRaw is int
-                    ? availRaw
-                    : int.tryParse('$availRaw') ?? 0;
-                final occupied = (total - available).clamp(0, total);
-
-                if (total == 0) {
-                  return _emptyFloorRow(context, floorName);
-                }
-
-                final percentage = (occupied / total).clamp(0.0, 1.0);
-
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(floorName, style: AppTextStyles.bodySmall),
-                          Text(
-                            '$occupied/$total',
-                            style: AppTextStyles.bodySmall,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: LinearProgressIndicator(
-                          value: percentage,
-                          minHeight: 6,
-                          backgroundColor: Theme.of(context).dividerColor,
-                          valueColor: AlwaysStoppedAnimation(
-                            Theme.of(context).colorScheme.primary,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              }).toList(),
-            );
-          },
-        ),
-      ],
-    );
-  }
-}
-
-/* =========================================================
-   RECENT ACTIVITY
-========================================================= */
-
-class _RecentActivity extends StatelessWidget {
-  final String adminId;
-  const _RecentActivity({required this.adminId});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(22),
-      decoration: _card(context),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.notifications_active, color: const Color(0xFFF97316)),
-              const SizedBox(width: 8),
-              const Text('Recent Activity', style: AppTextStyles.h3),
-            ],
-          ),
-          const SizedBox(height: 18),
-          StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('payments')
-                .where('adminId', isEqualTo: adminId)
-                .orderBy('paidAt', descending: true)
-                .limit(5)
-                .snapshots(),
-            builder: (context, paymentsSnap) {
-              return StreamBuilder<QuerySnapshot>(
-                stream: FirebaseFirestore.instance
-                    .collection('complaints')
-                    .where('adminId', isEqualTo: adminId)
-                    .orderBy('createdAt', descending: true)
-                    .limit(5)
-                    .snapshots(),
-                builder: (context, complaintsSnap) {
-                  final activities = <Map<String, dynamic>>[];
-
-                  // Add payment activities
-                  if (paymentsSnap.hasData) {
-                    for (final doc in paymentsSnap.data!.docs) {
-                      final data = doc.data() as Map<String, dynamic>;
-                      final residentName = data['residentName'] ?? 'Resident';
-                      final amount = data['amount'] ?? data['monthlyFee'] ?? 0;
-                      final paidAt = data['paidAt'] as Timestamp?;
-                      if (paidAt != null) {
-                        activities.add({
-                          'type': 'payment',
-                          'resident': residentName,
-                          'action': 'Paid monthly fees of ₹$amount',
-                          'time': paidAt,
-                        });
-                      }
-                    }
-                  }
-
-                  // Add complaint activities
-                  if (complaintsSnap.hasData) {
-                    for (final doc in complaintsSnap.data!.docs) {
-                      final data = doc.data() as Map<String, dynamic>;
-                      final residentName = data['residentName'] ?? 'Resident';
-                      final title = data['title'] ?? 'Complaint';
-                      final createdAt = data['createdAt'] as Timestamp?;
-                      if (createdAt != null) {
-                        activities.add({
-                          'type': 'complaint',
-                          'resident': residentName,
-                          'action': 'Raised complaint: $title',
-                          'time': createdAt,
-                        });
-                      }
-                    }
-                  }
-
-                  // Sort by time
-                  activities.sort((a, b) {
-                    final aTime = a['time'] as Timestamp;
-                    final bTime = b['time'] as Timestamp;
-                    return bTime.compareTo(aTime);
-                  });
-
-                  // Take top 5
-                  final recentActivities = activities.take(5).toList();
-
-                  if (recentActivities.isEmpty) {
-                    return const Text(
-                      'No recent activity',
-                      style: AppTextStyles.bodySmall,
-                    );
-                  }
-
-                  return Column(
-                    children: recentActivities.map((activity) {
-                      final time = activity['time'] as Timestamp;
-                      final now = DateTime.now();
-                      final diff = now.difference(time.toDate());
-                      String timeStr;
-                      if (diff.inHours < 1) {
-                        timeStr = '${diff.inMinutes} minutes ago';
-                      } else if (diff.inDays < 1) {
-                        timeStr = '${diff.inHours} hours ago';
-                      } else {
-                        timeStr =
-                            '${diff.inDays} day${diff.inDays > 1 ? 's' : ''} ago';
-                      }
-
-                      final type = activity['type'] as String;
-                      Color dotColor;
-                      if (type == 'payment') {
-                        dotColor = const Color(0xFF14B8A6);
-                      } else if (type == 'complaint') {
-                        dotColor = const Color(0xFFF97316);
-                      } else {
-                        dotColor = Theme.of(context).colorScheme.primary;
-                      }
-
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 16),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Container(
-                              margin: const EdgeInsets.only(top: 8),
-                              width: 8,
-                              height: 8,
-                              decoration: BoxDecoration(
-                                color: dotColor,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    activity['resident'],
-                                    style: AppTextStyles.bodyMedium,
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    activity['action'],
-                                    style: AppTextStyles.bodySmall,
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    timeStr,
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: Theme.of(
-                                        context,
-                                      ).textTheme.bodySmall?.color,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    }).toList(),
-                  );
-                },
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/* =========================================================
-   UPCOMING DUES
-========================================================= */
-
-class _UpcomingDues extends StatelessWidget {
-  final String adminId;
-  const _UpcomingDues({required this.adminId});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(22),
-      decoration: _card(context),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Upcoming Fee Dues', style: AppTextStyles.h3),
-          const SizedBox(height: 18),
-          StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('residents')
-                .where('adminId', isEqualTo: adminId)
-                .where('isAllocated', isEqualTo: true)
-                .snapshots(),
-            builder: (context, residentSnap) {
-              if (residentSnap.hasError) {
-                return Text(
-                  'Unable to load residents: ${residentSnap.error}',
-                  style: AppTextStyles.bodySmall,
-                );
-              }
-
-              if (!residentSnap.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
-
-              final residents = residentSnap.data!.docs;
-              if (residents.isEmpty) {
-                return const Text(
-                  'No allocated residents yet',
-                  style: AppTextStyles.bodySmall,
-                );
-              }
-
-              return StreamBuilder<QuerySnapshot>(
-                stream: FirebaseFirestore.instance
-                    .collection('payments')
-                    .where('adminId', isEqualTo: adminId)
-                    .snapshots(),
-                builder: (context, paymentsSnap) {
-                  if (paymentsSnap.hasError) {
-                    return Text(
-                      'Unable to load dues: ${paymentsSnap.error}',
-                      style: AppTextStyles.bodySmall,
-                    );
-                  }
-
-                  if (!paymentsSnap.hasData) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-
-                  final dueEntries = _calculateDueEntries(
-                    residents,
-                    paymentsSnap.data!.docs,
-                  );
-
-                  if (dueEntries.isEmpty) {
-                    return const Text(
-                      'Nothing due in the next cycle',
-                      style: AppTextStyles.bodySmall,
-                    );
-                  }
-
-                  return Column(
-                    children: dueEntries.map((entry) {
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    entry.name,
-                                    style: AppTextStyles.bodyMedium,
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    entry.roomLabel,
-                                    style: AppTextStyles.bodySmall,
-                                  ),
-                                ],
-                              ),
-                            ),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Text(
-                                  '₹${entry.amount}',
-                                  style: AppTextStyles.bodyMedium,
-                                ),
-                                const SizedBox(height: 4),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                    vertical: 4,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: entry.badgeColor.withOpacity(0.15),
-                                    borderRadius: BorderRadius.circular(20),
-                                  ),
-                                  child: Text(
-                                    entry.statusLabel,
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: entry.badgeColor,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'Due ${DateFormat('MMM dd').format(entry.dueDate)}',
-                                  style: AppTextStyles.caption.copyWith(
-                                    color: Theme.of(
-                                      context,
-                                    ).textTheme.bodySmall?.color,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      );
-                    }).toList(),
-                  );
-                },
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/* =========================================================
-   HELPERS
-========================================================= */
-
-BoxDecoration _card(BuildContext context) => BoxDecoration(
-  color: Theme.of(context).cardColor,
-  borderRadius: BorderRadius.circular(18),
-  boxShadow: _shadow,
-);
-
-const _shadow = [
-  BoxShadow(color: Color(0x11000000), blurRadius: 20, offset: Offset(0, 8)),
-];
-
-int _sumPendingFeesFromResidents(List<QueryDocumentSnapshot> docs) {
-  int total = 0;
-  for (final doc in docs) {
-    final data = doc.data() as Map<String, dynamic>;
-    final status = data['status']?.toString().toLowerCase() ?? '';
-    if (status == 'pending') {
-      final monthlyFee = data['monthlyFee'];
-      if (monthlyFee is int) {
-        total += monthlyFee;
-      } else if (monthlyFee is String) {
-        total += int.tryParse(monthlyFee) ?? 0;
-      }
-    }
-  }
-  return total;
-}
-
-int _sumPendingFeesFromPayments(List<QueryDocumentSnapshot> docs) {
-  int total = 0;
-  for (final doc in docs) {
-    final data = doc.data() as Map<String, dynamic>;
-    final status =
-        data['status']?.toString().toLowerCase() ??
-        data['paymentStatus']?.toString().toLowerCase() ??
-        '';
-    final isPending = status == 'pending' || data['isPaid'] == false;
-    if (isPending) {
-      total += _extractPaymentAmount(data);
-    }
-  }
-  return total;
-}
-
-int _extractPaymentAmount(Map<String, dynamic> data) {
-  final candidates = [data['pendingAmount'], data['dueAmount'], data['amount']];
-  for (final value in candidates) {
-    if (value is int) return value;
-    if (value is String) {
-      final parsed = int.tryParse(value);
-      if (parsed != null) return parsed;
-    }
-  }
-  return 0;
-}
-
-int _countPendingResidents(List<QueryDocumentSnapshot> payments) {
-  int count = 0;
-  for (final doc in payments) {
-    final data = doc.data() as Map<String, dynamic>;
-    final status = data['status']?.toString().toLowerCase() ?? '';
-    final isPaid = data['isPaid'] == true;
-    if (status == 'pending' || (!isPaid && status != 'paid')) {
-      count++;
-    }
-  }
-  return count;
-}
-
-Widget _emptyFloorRow(BuildContext context, String floorName) {
-  return Padding(
-    padding: const EdgeInsets.only(bottom: 16),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(floorName, style: AppTextStyles.bodySmall),
-        const SizedBox(height: 6),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: LinearProgressIndicator(
-            value: 0,
-            minHeight: 6,
-            backgroundColor: Theme.of(context).dividerColor,
-            valueColor: AlwaysStoppedAnimation(
-              Theme.of(context).colorScheme.primary,
-            ),
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
-class _DueEntry {
-  final String name;
-  final String roomLabel;
-  final DateTime dueDate;
-  final int amount;
-  final String statusLabel;
-  final Color badgeColor;
-
-  _DueEntry({
-    required this.name,
-    required this.roomLabel,
-    required this.dueDate,
-    required this.amount,
-    required this.statusLabel,
-    required this.badgeColor,
-  });
-}
-
-List<_DueEntry> _calculateDueEntries(
-  List<QueryDocumentSnapshot> residents,
-  List<QueryDocumentSnapshot> payments,
-) {
-  final paymentsByResident = <String, List<QueryDocumentSnapshot>>{};
-  for (final payment in payments) {
-    final data = payment.data() as Map<String, dynamic>;
-    final residentId = (data['residentId'] ?? data['residentDocId'])
-        ?.toString();
-    if (residentId == null) continue;
-    paymentsByResident.putIfAbsent(residentId, () => []).add(payment);
-  }
-
-  final now = DateTime.now();
-  final entries = <_DueEntry>[];
-
-  for (final resident in residents) {
-    final data = resident.data() as Map<String, dynamic>;
-    final name = data['fullName'] ?? data['name'] ?? 'Resident';
-    final allocation = data['allocationDetails'] as Map<String, dynamic>?;
-    final allocationDate =
-        _timestampToDate(allocation?['allocatedAt']) ??
-        _timestampToDate(data['allocatedAt']);
-    if (allocationDate == null) continue;
-
-    DateTime baseDue = allocationDate;
-    final residentPayments = paymentsByResident[resident.id] ?? [];
-    final latestPaid = _latestPaidDueDate(residentPayments);
-    if (latestPaid != null) {
-      baseDue = latestPaid;
-    }
-
-    DateTime nextDue = _addMonths(baseDue, 1);
-    int safety = 0;
-    while (!nextDue.isAfter(now) && safety < 24) {
-      nextDue = _addMonths(nextDue, 1);
-      safety++;
-    }
-
-    final difference = nextDue.difference(now).inDays;
-    String label;
-    Color color;
-    if (difference < 0) {
-      label = 'Overdue';
-      color = Colors.red;
-    } else if (difference <= 3) {
-      label = 'Reminder';
-      color = Colors.orange;
-    } else {
-      label = 'Upcoming';
-      color = Colors.grey.shade600;
-    }
-
-    final roomNumber =
-        allocation?['roomNumber'] ??
-        data['roomNumber'] ??
-        data['roomId'] ??
-        '-';
-    final bedNumber =
-        allocation?['bedNumber'] ?? data['bedId'] ?? data['bedSlot'] ?? '';
-    final roomLabel = bedNumber.isNotEmpty
-        ? 'Room $roomNumber • Bed $bedNumber'
-        : 'Room $roomNumber';
-
-    final amount = _extractPaymentAmount(data);
-    entries.add(
-      _DueEntry(
-        name: name,
-        roomLabel: roomLabel,
-        dueDate: nextDue,
-        amount: amount,
-        statusLabel: label,
-        badgeColor: color,
-      ),
-    );
-  }
-
-  entries.sort((a, b) => a.dueDate.compareTo(b.dueDate));
-  return entries.take(5).toList();
-}
-
-DateTime? _latestPaidDueDate(List<QueryDocumentSnapshot> payments) {
-  DateTime? candidate;
-  for (final payment in payments) {
-    final data = payment.data() as Map<String, dynamic>;
-    final status = data['status']?.toString().toLowerCase() ?? '';
-    final isPaid = status == 'paid' || data['isPaid'] == true;
-    if (!isPaid) continue;
-
-    final due = _timestampToDate(data['dueDate']);
-    final paid = _timestampToDate(data['paidAt']);
-    final candidateDate = due ?? paid;
-    if (candidateDate == null) continue;
-    if (candidate == null || candidateDate.isAfter(candidate)) {
-      candidate = candidateDate;
-    }
-  }
-  return candidate;
-}
-
-DateTime _addMonths(DateTime original, int months) {
-  final newMonthOffset = original.month - 1 + months;
-  final newYear = original.year + newMonthOffset ~/ 12;
-  final newMonth = newMonthOffset % 12 + 1;
-  final lastDayOfMonth = DateTime(newYear, newMonth + 1, 0).day;
-  final day = original.day <= lastDayOfMonth ? original.day : lastDayOfMonth;
-  return DateTime(
-    newYear,
-    newMonth,
-    day,
-    original.hour,
-    original.minute,
-    original.second,
-    original.millisecond,
-    original.microsecond,
-  );
-}
-
-DateTime? _timestampToDate(dynamic value) {
-  if (value is Timestamp) return value.toDate();
-  if (value is DateTime) return value;
-  return null;
-}
-
-Widget _residentList(BuildContext context, List<QueryDocumentSnapshot> docs) {
-  return Column(
-    children: docs.map((doc) {
-      final data = doc.data() as Map<String, dynamic>;
-      final name = data['fullName'] ?? '';
-      final allocation = data['allocationDetails'] as Map<String, dynamic>?;
-      final room = allocation?['roomNumber'] ?? data['roomId'] ?? '-';
-      final bed = allocation?['bedNumber'] ?? data['bedSlot'] ?? '-';
-      final allocatedAt =
-          data['allocatedAt'] as Timestamp? ??
-          allocation?['allocatedAt'] as Timestamp?;
-
-      final date = allocatedAt != null
-          ? DateFormat('MMM dd, yyyy').format(allocatedAt.toDate())
-          : '';
-
-      final initials = name.isNotEmpty
-          ? name.trim().split(' ').take(2).map((e) => e[0]).join()
-          : '?';
-
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 14),
-        child: Row(
-          children: [
-            CircleAvatar(
-              backgroundColor: Theme.of(
-                context,
-              ).colorScheme.primary.withOpacity(0.15),
-              child: Text(
-                initials,
-                style: TextStyle(color: Theme.of(context).colorScheme.primary),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(name, style: AppTextStyles.bodyMedium),
-                  Text('Room $room • Bed $bed', style: AppTextStyles.bodySmall),
-                ],
-              ),
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF10B981),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    'Allocated',
-                    style: AppTextStyles.label.copyWith(color: Colors.white),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(date, style: AppTextStyles.caption),
-              ],
-            ),
-          ],
-        ),
-      );
-    }).toList(),
-  );
 }

@@ -84,6 +84,28 @@ service cloud.firestore {
         );
     }
 
+    /* ───────── GENERIC OWNERSHIP ───────── */
+
+    function isAdminOwner(data) {
+      return isAdmin() &&
+        (
+          data.adminId == request.auth.uid ||
+          (data.ownerId != null && data.ownerId == request.auth.uid)
+        );
+    }
+
+    function isOwner(data) {
+      return isSignedIn() &&
+        (
+          data.adminId == request.auth.uid ||
+          (data.ownerId != null && data.ownerId == request.auth.uid)
+        );
+    }
+
+    function isSelf(data) {
+      return isSignedIn() && data.userId == request.auth.uid;
+    }
+
     /* ───────── ASSIGNMENT HELPERS ───────── */
 
     function isAssignedToPg(hostelId, pgId) {
@@ -128,28 +150,6 @@ service cloud.firestore {
         );
     }
 
-    /* ───────── GENERIC OWNERSHIP ───────── */
-
-    function isAdminOwner(data) {
-      return isAdmin() &&
-        (
-          data.adminId == request.auth.uid ||
-          (data.ownerId != null && data.ownerId == request.auth.uid)
-        );
-    }
-
-    function isOwner(data) {
-      return isSignedIn() &&
-        (
-          data.adminId == request.auth.uid ||
-          (data.ownerId != null && data.ownerId == request.auth.uid)
-        );
-    }
-
-    function isSelf(data) {
-      return isSignedIn() && data.userId == request.auth.uid;
-    }
-
     /* ───────── USERS ───────── */
 
     match /users/{userId} {
@@ -165,32 +165,46 @@ service cloud.firestore {
     /* ───────── HOSTELS ───────── */
 
     match /hostels/{hostelId} {
+      // Admin can create hostel if adminId matches their UID
       allow create: if isAdmin()
         && request.resource.data.adminId == request.auth.uid;
 
-      allow read: if isAdmin() || isHostelOwner(hostelId);
+      // READ: Admin owner OR assigned resident (single-doc get() by resident dashboard)
+      allow read: if (isAdmin()
+          && (resource.data.adminId == request.auth.uid
+            || resource.data.ownerId == request.auth.uid))
+        || (isResident()
+          && hasResidentRecord()
+          && residentDocForUser().data.isAllocated == true
+          && (
+            (residentDocForUser().data.allocationDetails != null
+              ? residentDocForUser().data.allocationDetails.hostelId
+              : residentDocForUser().data.hostelId) == hostelId
+          ));
 
       allow update, delete: if isAdminOwner(resource.data);
 
       match /pgs/{pgId} {
-        allow create, update, delete: if isHostelAdmin(hostelId);
+        // CREATE: Admin who owns the hostel, OR admin creating hostel+PG in a batch
+        allow create: if isHostelAdmin(hostelId)
+          || (isAdmin() && request.resource.data.adminId == request.auth.uid);
 
-        allow read: if isAdmin()
-          || isHostelOwner(hostelId)
+        allow update, delete: if isHostelAdmin(hostelId);
+
+        // READ: Hostel admin or assigned resident
+        allow read: if isHostelAdmin(hostelId)
           || isAssignedToPg(hostelId, pgId);
 
         match /floors/{floorId} {
           allow create, update, delete: if isHostelAdmin(hostelId);
 
-          allow read: if isAdmin()
-            || isHostelOwner(hostelId)
+          allow read: if isHostelAdmin(hostelId)
             || isAssignedToPg(hostelId, pgId);
 
           match /rooms/{roomId} {
             allow create, update, delete: if isHostelAdmin(hostelId);
 
-            allow read: if isAdmin()
-              || isHostelOwner(hostelId)
+            allow read: if isHostelAdmin(hostelId)
               || isAssignedToRoom(hostelId, pgId, floorId, roomId);
 
             match /beds/{bedId} {
@@ -198,12 +212,11 @@ service cloud.firestore {
 
               allow update: if isHostelAdmin(hostelId)
                 && request.resource.data.diff(resource.data).changedKeys()
-                  .hasOnly(['isOccupied', 'occupiedBy', 'residentId']);
+                  .hasOnly(['isOccupied', 'occupiedBy', 'residentId', 'allocatedAt']);
 
               allow delete: if isHostelAdmin(hostelId);
 
-              allow read: if isAdmin()
-                || isHostelOwner(hostelId)
+              allow read: if isHostelAdmin(hostelId)
                 || isAssignedToRoom(hostelId, pgId, floorId, roomId);
             }
           }
@@ -225,7 +238,7 @@ service cloud.firestore {
         && request.resource.data.uid == null
         && request.resource.data.authUid != null;
 
-      // Admin / owner access
+      // Admin / owner access — only if adminId matches
       allow read, update, delete: if isAdminOwner(resource.data)
         || isOwner(resource.data)
         || (

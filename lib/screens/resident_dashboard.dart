@@ -23,26 +23,32 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
     String? pgId,
     String? floorId,
     String? roomId,
+    String? bedId,
   ) async {
     if (hostelId == null || pgId == null || floorId == null || roomId == null) {
       return {};
     }
 
-    final floorRef = FirebaseFirestore.instance
-        .collection('hostels')
-        .doc(hostelId)
+    final hostelRef = FirebaseFirestore.instance.collection('hostels').doc(hostelId);
+    final floorRef = hostelRef
         .collection('pgs')
         .doc(pgId)
         .collection('floors')
         .doc(floorId);
     final roomRef = floorRef.collection('rooms').doc(roomId);
 
-    final results = await Future.wait([floorRef.get(), roomRef.get()]);
-    final floorSnap = results[0];
-    final roomSnap = results[1];
+    final results = await Future.wait([hostelRef.get(), floorRef.get(), roomRef.get()]);
+    final hostelSnap = results[0];
+    final floorSnap = results[1];
+    final roomSnap = results[2];
 
+    final hostelData = hostelSnap.data();
     final floorData = floorSnap.data();
     final roomData = roomSnap.data();
+
+    final hostelName = hostelData?['hostelName']?.toString()
+        ?? hostelData?['name']?.toString()
+        ?? '';
 
     final floorIndex = floorData?['floorIndex'];
     final floorLabel =
@@ -51,9 +57,11 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
         (floorIndex != null ? 'Floor ${floorIndex.toString()}' : '');
 
     return {
+      'hostelName': hostelName.isEmpty ? null : hostelName,
       'floorLabel': floorLabel.isEmpty ? null : floorLabel,
       'sharingType': roomData?['sharingType']?.toString(),
       'roomNumber': roomData?['roomNumber']?.toString(),
+      'bedId': bedId,
     };
   }
 
@@ -105,19 +113,22 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
 
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: StreamBuilder<DocumentSnapshot>(
+      body: StreamBuilder<DocumentSnapshot?>(
         stream: FirebaseFirestore.instance
             .collection('residents')
             .where('authUid', isEqualTo: user.uid)
             .limit(1)
             .snapshots()
-            .map((snap) => snap.docs.isNotEmpty ? snap.docs.first : null)
-            .where((doc) => doc != null)
-            .map((doc) => doc!),
+            .map((snap) => snap.docs.isNotEmpty ? snap.docs.first : null),
         builder: (context, residentSnap) {
-          if (!residentSnap.hasData) {
+          if (residentSnap.connectionState == ConnectionState.waiting) {
             return const Scaffold(
               body: Center(child: CircularProgressIndicator()),
+            );
+          }
+          if (!residentSnap.hasData || residentSnap.data == null) {
+            return const Scaffold(
+              body: Center(child: Text('Resident data not found')),
             );
           }
 
@@ -137,70 +148,88 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
           final floorId =
               allocationDetails?['floorId'] ?? residentData['floorId'];
           final roomId = allocationDetails?['roomId'] ?? residentData['roomId'];
+          final bedId = allocationDetails?['bedId'] ?? residentData['bedId'];
 
           final allocationMetaFuture =
               (hostelId != null &&
-                  pgId != null &&
-                  floorId != null &&
-                  roomId != null)
-              ? _fetchAllocationMetadata(hostelId, pgId, floorId, roomId)
-              : Future.value(<String, dynamic>{});
+                      pgId != null &&
+                      floorId != null &&
+                      roomId != null)
+                  ? _fetchAllocationMetadata(hostelId, pgId, floorId, roomId, bedId?.toString())
+                  : Future.value(<String, dynamic>{});
 
           return FutureBuilder<Map<String, dynamic>>(
             future: allocationMetaFuture,
             builder: (context, metaSnap) {
               final allocationMeta = metaSnap.data ?? {};
 
-              return SingleChildScrollView(
-                child: Column(
-                  children: [
-                    _Header(
-                      residentName:
-                          residentData['name'] ??
-                          residentData['fullName'] ??
-                          'Resident',
-                      onLogout: _logout,
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.all(24.0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _WelcomeBanner(
-                            residentName:
-                                residentData['name'] ??
-                                residentData['fullName'] ??
-                                'Resident',
-                            allocationDetails: allocationDetails,
-                            allocationMeta: allocationMeta,
-                            residentId: _residentId!,
-                          ),
-                          const SizedBox(height: 24),
-                          if (isAllocated) ...[
-                            _MainGrid(
-                              residentId: _residentId!,
-                              allocationDetails: allocationDetails,
-                              residentData: residentData,
-                              allocationMeta: allocationMeta,
-                            ),
-                            const SizedBox(height: 24),
-                            _PaymentSection(residentId: _residentId!),
-                            const SizedBox(height: 24),
-                            _QuickActions(
-                              residentId: _residentId!,
-                              pgId: pgId?.toString(),
-                            ),
-                            const SizedBox(height: 24),
-                            _BottomGrid(
-                              residentId: _residentId!,
-                              pgId: pgId?.toString(),
-                            ),
-                          ] else
-                            _AllocationPendingCard(),
-                        ],
+              return Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Theme.of(context).scaffoldBackgroundColor,
+                      const Color(0xFFF8FAFC),
+                    ],
+                  ),
+                ),
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  child: Column(
+                    children: [
+                      _Header(
+                        residentName:
+                            residentData['name'] ??
+                            residentData['fullName'] ??
+                            'Resident',
+                        onLogout: _logout,
                       ),
-                    ),
-                  ],
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 24.0,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _WelcomeBanner(
+                              residentName:
+                                  residentData['name'] ??
+                                  residentData['fullName'] ??
+                                  'Resident',
+                              allocationDetails: allocationDetails,
+                              allocationMeta: allocationMeta,
+                              residentId: _residentId!,
+                            ),
+                            const SizedBox(height: 32),
+                            if (isAllocated) ...[
+                              _MainGrid(
+                                residentId: _residentId!,
+                                allocationDetails: allocationDetails,
+                                residentData: residentData,
+                                allocationMeta: allocationMeta,
+                              ),
+                              const SizedBox(height: 32),
+                              _PaymentSection(residentId: _residentId!),
+                              const SizedBox(height: 32),
+                              _QuickActions(
+                                residentId: _residentId!,
+                                pgId: pgId?.toString(),
+                              ),
+                              const SizedBox(height: 32),
+                              _BottomGrid(
+                                residentId: _residentId!,
+                                pgId: pgId?.toString(),
+                              ),
+                              const SizedBox(height: 40),
+                            ] else
+                              _AllocationPendingCard(),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               );
             },
@@ -225,68 +254,100 @@ class _Header extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final app = context.findAncestorWidgetOfExactType<SmartStayApp>();
-    final date = DateFormat('MMM dd, yyyy').format(DateTime.now());
+    final date = DateFormat('MMM dd').format(DateTime.now());
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      padding: const EdgeInsets.fromLTRB(24, 60, 24, 20),
       decoration: BoxDecoration(
-        color: Theme.of(context).appBarTheme.backgroundColor,
-        border: Border(
-          bottom: BorderSide(color: Theme.of(context).dividerColor, width: 1),
-        ),
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 15,
+            offset: const Offset(0, 5),
+          ),
+        ],
       ),
       child: Row(
         children: [
           Container(
-            height: 44,
-            width: 44,
+            height: 48,
+            width: 48,
             decoration: BoxDecoration(
               gradient: const LinearGradient(
-                colors: [Color(0xFF14B8A6), Color(0xFF06B6D4)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF6366F1), Color(0xFF4F46E5)],
               ),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: const Icon(Icons.home, color: Colors.white),
-          ),
-          const SizedBox(width: 12),
-          const Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('SmartStay', style: AppTextStyles.h3),
-              Text('Resident Portal', style: AppTextStyles.bodySmall),
-            ],
-          ),
-          const Spacer(),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: Theme.of(context).cardColor,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Theme.of(context).dividerColor),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.calendar_today_outlined,
-                  size: 16,
-                  color: Theme.of(context).iconTheme.color,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF6366F1).withOpacity(0.2),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
                 ),
-                const SizedBox(width: 8),
-                Text(date, style: AppTextStyles.bodySmall),
+              ],
+            ),
+            child: const Icon(Icons.home_rounded, color: Colors.white, size: 26),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'SmartStay',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.5,
+                    color: Color(0xFF1E293B),
+                  ),
+                ),
+                Text(
+                  'Resident Portal • $date',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFF64748B),
+                  ),
+                ),
               ],
             ),
           ),
-          const SizedBox(width: 14),
-          IconButton(
-            tooltip: isDark ? 'Light Mode' : 'Dark Mode',
-            icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
-            onPressed: () => app?.themeController.toggleTheme(),
-          ),
-          const SizedBox(width: 8),
-          IconButton(
-            tooltip: 'Logout',
-            icon: const Icon(Icons.logout),
-            onPressed: onLogout,
+          Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFFF1F5F9),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  icon: Icon(
+                    isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
+                    size: 20,
+                    color: const Color(0xFF475569),
+                  ),
+                  onPressed: () => app?.themeController.toggleTheme(),
+                ),
+                Container(
+                  width: 1,
+                  height: 20,
+                  color: const Color(0xFFCBD5E1),
+                ),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(
+                    Icons.logout_rounded,
+                    size: 20,
+                    color: Color(0xFFEF4444),
+                  ),
+                  onPressed: onLogout,
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -322,12 +383,14 @@ class _WelcomeBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final metaRoomNumber = allocationMeta?['roomNumber']?.toString();
     final metaFloorLabel = allocationMeta?['floorLabel']?.toString();
-    final roomNumber = metaRoomNumber?.isNotEmpty == true
-        ? metaRoomNumber!
-        : allocationDetails?['roomNumber'] ?? '-';
-    final floorName = metaFloorLabel?.isNotEmpty == true
-        ? metaFloorLabel!
-        : allocationDetails?['floorName'] ?? '-';
+    final roomNumber =
+        metaRoomNumber?.isNotEmpty == true
+            ? metaRoomNumber!
+            : allocationDetails?['roomNumber'] ?? '-';
+    final floorName =
+        metaFloorLabel?.isNotEmpty == true
+            ? metaFloorLabel!
+            : allocationDetails?['floorName'] ?? '-';
 
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
@@ -350,17 +413,19 @@ class _WelcomeBanner extends StatelessWidget {
             final totalComplaints = complaints.length;
 
             return Container(
-              padding: const EdgeInsets.all(24),
+              padding: const EdgeInsets.all(28),
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
-                  colors: [Color(0xFF14B8A6), Color(0xFF06B6D4)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
                 ),
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(32),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 20,
-                    offset: const Offset(0, 10),
+                    color: const Color(0xFF6366F1).withOpacity(0.3),
+                    blurRadius: 25,
+                    offset: const Offset(0, 12),
                   ),
                 ],
               ),
@@ -368,37 +433,69 @@ class _WelcomeBanner extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      CircleAvatar(
-                        radius: 32,
-                        backgroundColor: Colors.white.withOpacity(0.3),
+                      Container(
+                        height: 72,
+                        width: 72,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.2),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Colors.white.withOpacity(0.3),
+                            width: 2,
+                          ),
+                        ),
+                        alignment: Alignment.center,
                         child: Text(
                           _getInitials(residentName),
                           style: const TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
+                            fontSize: 28,
+                            fontWeight: FontWeight.w800,
                             color: Colors.white,
                           ),
                         ),
                       ),
-                      const SizedBox(width: 16),
+                      const SizedBox(width: 20),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Welcome back, $residentName!',
+                              'Hello, $residentName',
                               style: const TextStyle(
                                 color: Colors.white,
-                                fontSize: 20,
-                                fontWeight: FontWeight.w600,
+                                fontSize: 24,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -0.5,
                               ),
                             ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'Room $roomNumber • $floorName',
-                              style: TextStyle(
-                                color: Colors.white.withOpacity(0.9),
-                                fontSize: 14,
+                            const SizedBox(height: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(
+                                    Icons.door_front_door_rounded,
+                                    size: 14,
+                                    color: Colors.white,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'Room $roomNumber • $floorName',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ],
@@ -406,13 +503,14 @@ class _WelcomeBanner extends StatelessWidget {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 32),
                   Row(
                     children: [
                       Expanded(
                         child: _StatMiniCard(
-                          label: 'On-Time Pays',
+                          label: 'Dues Paid',
                           value: onTimePayments.toString(),
+                          icon: Icons.currency_rupee_rounded,
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -420,11 +518,8 @@ class _WelcomeBanner extends StatelessWidget {
                         child: _StatMiniCard(
                           label: 'Complaints',
                           value: totalComplaints.toString(),
+                          icon: Icons.error_rounded,
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _StatMiniCard(label: 'Status', value: 'Active'),
                       ),
                     ],
                   ),
@@ -441,34 +536,45 @@ class _WelcomeBanner extends StatelessWidget {
 class _StatMiniCard extends StatelessWidget {
   final String label;
   final String value;
+  final IconData icon;
 
-  const _StatMiniCard({required this.label, required this.value});
+  const _StatMiniCard({
+    required this.label,
+    required this.value,
+    required this.icon,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.2),
-        borderRadius: BorderRadius.circular(12),
+        color: Colors.white.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withOpacity(0.2), width: 1),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            label,
-            style: TextStyle(
-              color: Colors.white.withOpacity(0.9),
-              fontSize: 12,
-            ),
-          ),
-          const SizedBox(height: 4),
+          Icon(icon, color: Colors.white, size: 20),
+          const SizedBox(height: 10),
           Text(
             value,
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 18,
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.5,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.7),
+              fontSize: 10,
               fontWeight: FontWeight.w600,
+              letterSpacing: 0.2,
             ),
           ),
         ],
@@ -550,101 +656,141 @@ class _RoomDetailsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hostelName = allocationDetails?['hostelName'] ?? '-';
+    final metaHostelName = allocationMeta?['hostelName']?.toString();
     final metaFloorLabel = allocationMeta?['floorLabel']?.toString();
     final metaRoomNumber = allocationMeta?['roomNumber']?.toString();
     final metaSharingType = allocationMeta?['sharingType']?.toString();
+    final metaBedId = allocationMeta?['bedId']?.toString();
 
-    final floorName = metaFloorLabel?.isNotEmpty == true
-        ? metaFloorLabel!
-        : allocationDetails?['floorName'] ?? '-';
-    final roomNumber = metaRoomNumber?.isNotEmpty == true
-        ? metaRoomNumber!
-        : allocationDetails?['roomNumber'] ?? '-';
-    final bedNumber = allocationDetails?['bedNumber'] ?? '-';
-    final sharingType = metaSharingType?.isNotEmpty == true
-        ? metaSharingType!
-        : residentData['sharingType'] ?? 'N/A';
+    final hostelName =
+        metaHostelName?.isNotEmpty == true
+            ? metaHostelName!
+            : allocationDetails?['hostelName'] ?? '-';
+    final floorName =
+        metaFloorLabel?.isNotEmpty == true
+            ? metaFloorLabel!
+            : allocationDetails?['floorName'] ?? '-';
+    final roomNumber =
+        metaRoomNumber?.isNotEmpty == true
+            ? metaRoomNumber!
+            : allocationDetails?['roomNumber'] ?? '-';
+    final bedNumber =
+        metaBedId?.isNotEmpty == true
+            ? metaBedId!
+            : allocationDetails?['bedId']
+              ?? allocationDetails?['bedNumber']
+              ?? residentData['bedId']
+              ?? '-';
+    final sharingType =
+        metaSharingType?.isNotEmpty == true
+            ? metaSharingType!
+            : residentData['sharingType'] ?? 'N/A';
     final allocatedAt = allocationDetails?['allocatedAt'] as Timestamp?;
 
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: Theme.of(context).dividerColor),
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+        border: Border.all(color: const Color(0xFFF1F5F9)),
       ),
       child: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.all(8),
+                  padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
                     color: const Color(0xFF14B8A6).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  child: const Icon(Icons.bed, color: Color(0xFF14B8A6)),
+                  child: const Icon(
+                    Icons.meeting_room_rounded,
+                    color: Color(0xFF14B8A6),
+                    size: 24,
+                  ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 14),
                 const Text(
-                  'My Room Details',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                  'Room Details',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.5,
+                  ),
                 ),
               ],
             ),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                Expanded(
-                  child: _InfoRow(label: 'Hostel Name', value: hostelName),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _InfoRow(label: 'Floor', value: floorName),
-                ),
-              ],
+            const SizedBox(height: 24),
+            _InfoRow(
+              icon: Icons.business_rounded,
+              label: 'Hostel Name',
+              value: hostelName,
             ),
-            const SizedBox(height: 16),
+            const Divider(height: 24, color: Color(0xFFF1F5F9)),
             Row(
               children: [
-                Expanded(
-                  child: _InfoRow(label: 'Room Number', value: roomNumber),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _InfoRow(label: 'Bed Number', value: bedNumber),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: _InfoRow(label: 'Sharing Type', value: sharingType),
-                ),
-                const SizedBox(width: 16),
                 Expanded(
                   child: _InfoRow(
-                    label: 'Resident Since',
-                    value: allocatedAt != null
-                        ? DateFormat(
-                            'MMM dd, yyyy',
-                          ).format(allocatedAt.toDate())
-                        : '-',
+                    icon: Icons.layers_rounded,
+                    label: 'Floor',
+                    value: floorName,
+                  ),
+                ),
+                Expanded(
+                  child: _InfoRow(
+                    icon: Icons.numbers_rounded,
+                    label: 'Room Number',
+                    value: roomNumber,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 20),
+            const Divider(height: 24, color: Color(0xFFF1F5F9)),
+            Row(
+              children: [
+                Expanded(
+                  child: _InfoRow(
+                    icon: Icons.bed_rounded,
+                    label: 'Bed Number',
+                    value: bedNumber,
+                  ),
+                ),
+                Expanded(
+                  child: _InfoRow(
+                    icon: Icons.people_rounded,
+                    label: 'Sharing Type',
+                    value: sharingType,
+                  ),
+                ),
+              ],
+            ),
+            const Divider(height: 24, color: Color(0xFFF1F5F9)),
+            _InfoRow(
+              icon: Icons.event_available_rounded,
+              label: 'Resident Since',
+              value:
+                  allocatedAt != null
+                      ? DateFormat('MMM dd, yyyy').format(allocatedAt.toDate())
+                      : '-',
+            ),
+            const SizedBox(height: 24),
             const Text(
-              'Roommates',
+              'ROOMMATES',
               style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF14B8A6),
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF64748B),
+                letterSpacing: 1.2,
               ),
             ),
             const SizedBox(height: 12),
@@ -653,12 +799,9 @@ class _RoomDetailsCard extends StatelessWidget {
                 final targetRoomId =
                     allocationDetails?['roomId'] ?? residentData['roomId'];
                 if (targetRoomId == null) {
-                  return Text(
+                  return const Text(
                     'No roommate data available',
-                    style: TextStyle(
-                      color: Theme.of(context).textTheme.bodySmall?.color,
-                      fontSize: 14,
-                    ),
+                    style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
                   );
                 }
 
@@ -672,22 +815,25 @@ class _RoomDetailsCard extends StatelessWidget {
                     final roommates = roommatesSnap.data?.docs ?? [];
                     final selfAuthUid =
                         residentData['authUid'] ?? residentData['uid'];
-                    final otherRoommates = roommates
-                        .where(
-                          (r) =>
-                              (r.data() as Map<String, dynamic>)['authUid'] !=
+                    final otherRoommates =
+                        roommates
+                            .where(
+                              (r) =>
+                                  (r.data() as Map<String, dynamic>)[
+                                    'authUid'
+                                  ] !=
                                   selfAuthUid &&
-                              (r.data() as Map<String, dynamic>)['uid'] !=
+                                  (r.data() as Map<String, dynamic>)['uid'] !=
                                   selfAuthUid,
-                        )
-                        .toList();
+                            )
+                            .toList();
 
                     if (otherRoommates.isEmpty) {
-                      return Text(
+                      return const Text(
                         'No other roommates',
                         style: TextStyle(
-                          color: Theme.of(context).textTheme.bodySmall?.color,
-                          fontSize: 14,
+                          color: Color(0xFF94A3B8),
+                          fontSize: 13,
                         ),
                       );
                     }
@@ -699,12 +845,13 @@ class _RoomDetailsCard extends StatelessWidget {
                         final data = doc.data() as Map<String, dynamic>;
                         final name =
                             data['name'] ?? data['fullName'] ?? 'Unknown';
-                        final initials = name
-                            .split(' ')
-                            .take(2)
-                            .map((e) => e.isNotEmpty ? e[0] : '')
-                            .join()
-                            .toUpperCase();
+                        final initials =
+                            name
+                                .split(' ')
+                                .take(2)
+                                .map((e) => e.isNotEmpty ? e[0] : '')
+                                .join()
+                                .toUpperCase();
 
                         return Container(
                           padding: const EdgeInsets.symmetric(
@@ -712,28 +859,36 @@ class _RoomDetailsCard extends StatelessWidget {
                             vertical: 8,
                           ),
                           decoration: BoxDecoration(
-                            color: Theme.of(context).cardColor,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: Theme.of(context).dividerColor,
-                            ),
+                            color: const Color(0xFFF8FAFC),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFFF1F5F9)),
                           ),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               CircleAvatar(
-                                radius: 14,
-                                backgroundColor: const Color(0xFF14B8A6),
+                                radius: 12,
+                                backgroundColor: const Color(
+                                  0xFF14B8A6,
+                                ).withOpacity(0.1),
                                 child: Text(
                                   initials,
                                   style: const TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.white,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF14B8A6),
                                   ),
                                 ),
                               ),
-                              const SizedBox(width: 8),
-                              Text(name, style: const TextStyle(fontSize: 14)),
+                              const SizedBox(width: 10),
+                              Text(
+                                name,
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF334155),
+                                ),
+                              ),
                             ],
                           ),
                         );
@@ -751,27 +906,44 @@ class _RoomDetailsCard extends StatelessWidget {
 }
 
 class _InfoRow extends StatelessWidget {
+  final IconData icon;
   final String label;
   final String value;
 
-  const _InfoRow({required this.label, required this.value});
+  const _InfoRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: Theme.of(context).textTheme.bodySmall?.color,
-          ),
+        Row(
+          children: [
+            Icon(icon, size: 14, color: const Color(0xFF64748B)),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF64748B),
+                letterSpacing: 0.2,
+              ),
+            ),
+          ],
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 6),
         Text(
           value,
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          style: const TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFF1E293B),
+          ),
         ),
       ],
     );
@@ -785,38 +957,50 @@ class _QuickStatsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: Theme.of(context).dividerColor),
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+        border: Border.all(color: const Color(0xFFF1F5F9)),
       ),
       child: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.all(8),
+                  padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF6C63FF).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
+                    color: const Color(0xFF6366F1).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
                   ),
                   child: const Icon(
-                    Icons.trending_up,
-                    color: Color(0xFF6C63FF),
+                    Icons.insights_rounded,
+                    color: Color(0xFF6366F1),
+                    size: 24,
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 14),
                 const Text(
                   'Quick Stats',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.5,
+                  ),
                 ),
               ],
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 24),
             StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance
                   .collection('complaints')
@@ -824,11 +1008,13 @@ class _QuickStatsCard extends StatelessWidget {
                   .snapshots(),
               builder: (context, complaintsSnap) {
                 final complaints = complaintsSnap.data?.docs ?? [];
-                final activeComplaints = complaints.where((c) {
-                  final data = c.data() as Map<String, dynamic>;
-                  final status = data['status']?.toString().toLowerCase() ?? '';
-                  return status != 'resolved' && status != 'closed';
-                }).length;
+                final activeComplaints =
+                    complaints.where((c) {
+                      final data = c.data() as Map<String, dynamic>;
+                      final status =
+                          data['status']?.toString().toLowerCase() ?? '';
+                      return status != 'resolved' && status != 'closed';
+                    }).length;
 
                 return StreamBuilder<QuerySnapshot>(
                   stream: FirebaseFirestore.instance
@@ -839,9 +1025,10 @@ class _QuickStatsCard extends StatelessWidget {
                       .snapshots(),
                   builder: (context, paymentSnap) {
                     final payments = paymentSnap.data?.docs ?? [];
-                    final latestPayment = payments.isNotEmpty
-                        ? payments.first.data() as Map<String, dynamic>
-                        : null;
+                    final latestPayment =
+                        payments.isNotEmpty
+                            ? payments.first.data() as Map<String, dynamic>
+                            : null;
                     final paymentStatus =
                         latestPayment?['status']?.toString() ??
                         latestPayment?['isPaid']?.toString() ??
@@ -852,32 +1039,53 @@ class _QuickStatsCard extends StatelessWidget {
 
                     return Column(
                       children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text('Active Complaints'),
-                            Chip(
-                              label: Text(activeComplaints.toString()),
-                              backgroundColor: activeComplaints > 0
-                                  ? Colors.orange.withOpacity(0.2)
-                                  : Colors.green.withOpacity(0.2),
+                        _QuickStatItem(
+                          icon: Icons.error_outline_rounded,
+                          color: const Color(0xFFEF4444),
+                          label: 'Active Complaints',
+                          value: activeComplaints.toString(),
+                          trailing: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
                             ),
-                          ],
+                            decoration: BoxDecoration(
+                              color:
+                                  (activeComplaints > 0
+                                          ? const Color(0xFFEF4444)
+                                          : const Color(0xFF10B981))
+                                      .withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              activeComplaints > 0 ? 'Pending' : 'All Clear',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color:
+                                    activeComplaints > 0
+                                        ? const Color(0xFFEF4444)
+                                        : const Color(0xFF10B981),
+                              ),
+                            ),
+                          ),
                         ),
-                        const SizedBox(height: 16),
-                        const Divider(),
-                        const SizedBox(height: 16),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text('Payment Status'),
-                            Chip(
-                              label: Text(isPaid ? 'Up to Date' : 'Pending'),
-                              backgroundColor: isPaid
-                                  ? Colors.green.withOpacity(0.2)
-                                  : Colors.red.withOpacity(0.2),
-                            ),
-                          ],
+                        const Divider(height: 32, color: Color(0xFFF1F5F9)),
+                        _QuickStatItem(
+                          icon: Icons.payments_outlined,
+                          color: const Color(0xFF10B981),
+                          label: 'Payment Status',
+                          value: isPaid ? 'Up to Date' : 'Due Soon',
+                          trailing: Icon(
+                            isPaid
+                                ? Icons.check_circle_rounded
+                                : Icons.info_rounded,
+                            color:
+                                isPaid
+                                    ? const Color(0xFF10B981)
+                                    : const Color(0xFFF59E0B),
+                            size: 20,
+                          ),
                         ),
                       ],
                     );
@@ -888,6 +1096,65 @@ class _QuickStatsCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _QuickStatItem extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String label;
+  final String value;
+  final Widget? trailing;
+
+  const _QuickStatItem({
+    required this.icon,
+    required this.color,
+    required this.label,
+    required this.value,
+    this.trailing,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          height: 40,
+          width: 40,
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, color: color, size: 20),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF64748B),
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                value,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF1E293B),
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (trailing != null) trailing!,
+      ],
     );
   }
 }
@@ -903,14 +1170,21 @@ class _PaymentSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: Theme.of(context).dividerColor),
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+        border: Border.all(color: const Color(0xFFF1F5F9)),
       ),
       child: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -920,22 +1194,24 @@ class _PaymentSection extends StatelessWidget {
                 Row(
                   children: [
                     Container(
-                      padding: const EdgeInsets.all(8),
+                      padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF14B8A6).withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(8),
+                        color: const Color(0xFF6366F1).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
                       ),
                       child: const Icon(
-                        Icons.currency_rupee,
-                        color: Color(0xFF14B8A6),
+                        Icons.payments_rounded,
+                        color: Color(0xFF6366F1),
+                        size: 24,
                       ),
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 14),
                     const Text(
-                      'Fee Status & Payment History',
+                      'Fee & Payments',
                       style: TextStyle(
                         fontSize: 18,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.5,
                       ),
                     ),
                   ],
@@ -960,21 +1236,40 @@ class _PaymentSection extends StatelessWidget {
                         dueDateTime != null &&
                         DateTime.now().isAfter(dueDateTime);
 
-                    return Chip(
-                      label: Text(
-                        isPaid ? 'Paid' : (isOverdue ? 'Overdue' : 'Pending'),
+                    return Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
                       ),
-                      backgroundColor: isPaid
-                          ? Colors.green.withOpacity(0.2)
-                          : (isOverdue
-                                ? Colors.red.withOpacity(0.2)
-                                : Colors.orange.withOpacity(0.2)),
+                      decoration: BoxDecoration(
+                        color:
+                            (isPaid
+                                    ? const Color(0xFF10B981)
+                                    : (isOverdue
+                                        ? const Color(0xFFEF4444)
+                                        : const Color(0xFFF59E0B)))
+                                .withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        isPaid ? 'Paid' : (isOverdue ? 'Overdue' : 'Pending'),
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color:
+                              isPaid
+                                  ? const Color(0xFF10B981)
+                                  : (isOverdue
+                                      ? const Color(0xFFEF4444)
+                                      : const Color(0xFFF59E0B)),
+                        ),
+                      ),
                     );
                   },
                 ),
               ],
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 24),
             StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance
                   .collection('payments')
@@ -985,13 +1280,20 @@ class _PaymentSection extends StatelessWidget {
               builder: (context, snap) {
                 if (!snap.hasData || snap.data!.docs.isEmpty) {
                   return Container(
-                    padding: const EdgeInsets.all(20),
+                    padding: const EdgeInsets.all(24),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF14B8A6).withOpacity(0.05),
-                      borderRadius: BorderRadius.circular(12),
+                      color: const Color(0xFFF8FAFC),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: const Color(0xFFF1F5F9)),
                     ),
                     child: const Center(
-                      child: Text('No payment records found'),
+                      child: Text(
+                        'No payment records found',
+                        style: TextStyle(
+                          color: Color(0xFF64748B),
+                          fontSize: 14,
+                        ),
+                      ),
                     ),
                   );
                 }
@@ -1006,152 +1308,76 @@ class _PaymentSection extends StatelessWidget {
                 return Container(
                   padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        const Color(0xFF14B8A6).withOpacity(0.1),
-                        const Color(0xFF06B6D4).withOpacity(0.1),
-                      ],
-                    ),
-                    borderRadius: BorderRadius.circular(12),
+                    color: const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFFF1F5F9)),
                   ),
-                  child: Row(
+                  child: Column(
                     children: [
-                      Expanded(
-                        child: _PaymentInfoItem(
-                          label: 'Current Month',
-                          value: month.isNotEmpty
-                              ? month
-                              : (dueDate != null
-                                    ? DateFormat(
-                                        'MMMM yyyy',
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _PaymentInfoItem(
+                              label: 'CURR. MONTH',
+                              value:
+                                  month.isNotEmpty
+                                      ? month
+                                      : (dueDate != null
+                                          ? DateFormat(
+                                            'MMMM yyyy',
+                                          ).format(dueDate.toDate())
+                                          : '-'),
+                            ),
+                          ),
+                          Expanded(
+                            child: _PaymentInfoItem(
+                              label: 'AMOUNT',
+                              value: '₹$amount',
+                            ),
+                          ),
+                        ],
+                      ),
+                      const Divider(height: 32, color: Color(0xFFE2E8F0)),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _PaymentInfoItem(
+                              label: 'PAID ON',
+                              value:
+                                  paidAt != null
+                                      ? DateFormat(
+                                        'MMM dd, yyyy',
+                                      ).format(paidAt.toDate())
+                                      : '-',
+                            ),
+                          ),
+                          Expanded(
+                            child: _PaymentInfoItem(
+                              label: 'DUE DATE',
+                              value:
+                                  dueDate != null
+                                      ? DateFormat(
+                                        'MMM dd, yyyy',
                                       ).format(dueDate.toDate())
-                                    : '-'),
-                        ),
-                      ),
-                      Expanded(
-                        child: _PaymentInfoItem(
-                          label: 'Amount',
-                          value: '₹${amount.toString()}',
-                        ),
-                      ),
-                      Expanded(
-                        child: _PaymentInfoItem(
-                          label: 'Paid On',
-                          value: paidAt != null
-                              ? DateFormat(
-                                  'MMM dd, yyyy',
-                                ).format(paidAt.toDate())
-                              : '-',
-                        ),
-                      ),
-                      Expanded(
-                        child: _PaymentInfoItem(
-                          label: 'Due Date',
-                          value: dueDate != null
-                              ? DateFormat(
-                                  'MMM dd, yyyy',
-                                ).format(dueDate.toDate())
-                              : '-',
-                        ),
+                                      : '-',
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
                 );
               },
             ),
-            const SizedBox(height: 20),
-            Builder(
-              builder: (context) {
-                return StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance
-                      .collection('payments')
-                      .where('residentId', isEqualTo: residentId)
-                      .orderBy('dueDate', descending: true)
-                      .limit(1)
-                      .snapshots(),
-                  builder: (context, snap) {
-                    if (!snap.hasData || snap.data!.docs.isEmpty) {
-                      return const SizedBox.shrink();
-                    }
-                    final data =
-                        snap.data!.docs.first.data() as Map<String, dynamic>;
-                    final dueDate = data['dueDate'] as Timestamp?;
-                    final isPaid =
-                        data['status']?.toString().toLowerCase() == 'paid' ||
-                        data['isPaid'] == true;
-                    final dueDateTime = dueDate?.toDate();
-                    final isOverdue =
-                        !isPaid &&
-                        dueDateTime != null &&
-                        DateTime.now().isAfter(dueDateTime);
-                    final startOfMonth = dueDateTime != null
-                        ? DateTime(dueDateTime.year, dueDateTime.month, 1)
-                        : null;
-                    final totalDays =
-                        dueDateTime != null && startOfMonth != null
-                        ? dueDateTime.difference(startOfMonth).inDays
-                        : 0;
-                    final elapsedDays =
-                        dueDateTime != null && startOfMonth != null
-                        ? DateTime.now().difference(startOfMonth).inDays
-                        : 0;
-                    final progress = totalDays > 0
-                        ? (elapsedDays / totalDays).clamp(0.0, 1.0)
-                        : 0.0;
-
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              'Next Due Date',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Theme.of(
-                                  context,
-                                ).textTheme.bodySmall?.color,
-                              ),
-                            ),
-                            Text(
-                              dueDateTime != null
-                                  ? DateFormat(
-                                      'MMM dd, yyyy',
-                                    ).format(dueDateTime)
-                                  : '-',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: isOverdue ? Colors.red : Colors.teal,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(10),
-                          child: LinearProgressIndicator(
-                            value: isPaid ? 1 : progress,
-                            minHeight: 8,
-                            backgroundColor: Colors.grey.withOpacity(0.2),
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              isPaid
-                                  ? Colors.green
-                                  : (isOverdue ? Colors.red : Colors.teal),
-                            ),
-                          ),
-                        ),
-                      ],
-                    );
-                  },
-                );
-              },
-            ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 24),
             const Text(
-              'Payment History',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              'PAYMENT HISTORY',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF64748B),
+                letterSpacing: 1.2,
+              ),
             ),
             const SizedBox(height: 12),
             StreamBuilder<QuerySnapshot>(
@@ -1159,13 +1385,19 @@ class _PaymentSection extends StatelessWidget {
                   .collection('payments')
                   .where('residentId', isEqualTo: residentId)
                   .orderBy('paidAt', descending: true)
-                  .limit(6)
+                  .limit(5)
                   .snapshots(),
               builder: (context, snap) {
                 if (!snap.hasData || snap.data!.docs.isEmpty) {
                   return const Padding(
-                    padding: EdgeInsets.all(20),
-                    child: Center(child: Text('No payment history')),
+                    padding: EdgeInsets.symmetric(vertical: 20),
+                    child: Center(
+                      child: Text(
+                        'No history',
+                        style:
+                            TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+                      ),
+                    ),
                   );
                 }
 
@@ -1177,61 +1409,60 @@ class _PaymentSection extends StatelessWidget {
                     final month = data['month'] ?? '';
 
                     return Container(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      padding: const EdgeInsets.all(16),
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
-                        color: Theme.of(context).cardColor,
+                        color: const Color(0xFFF8FAFC),
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: Theme.of(context).dividerColor,
-                        ),
+                        border: Border.all(color: const Color(0xFFF1F5F9)),
                       ),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                month.isNotEmpty
+                                    ? month
+                                    : (paidAt != null
+                                        ? DateFormat(
+                                          'MMMM yyyy',
+                                        ).format(paidAt.toDate())
+                                        : 'Unknown'),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 14,
+                                  color: Color(0xFF334155),
+                                ),
+                              ),
+                              if (paidAt != null)
                                 Text(
-                                  month.isNotEmpty
-                                      ? month
-                                      : (paidAt != null
-                                            ? DateFormat(
-                                                'MMMM yyyy',
-                                              ).format(paidAt.toDate())
-                                            : 'Unknown'),
+                                  DateFormat(
+                                    'MMM dd, yyyy',
+                                  ).format(paidAt.toDate()),
                                   style: const TextStyle(
-                                    fontWeight: FontWeight.w600,
+                                    fontSize: 11,
+                                    color: Color(0xFF94A3B8),
                                   ),
                                 ),
-                                if (paidAt != null)
-                                  Text(
-                                    DateFormat(
-                                      'MMM dd, yyyy',
-                                    ).format(paidAt.toDate()),
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Theme.of(
-                                        context,
-                                      ).textTheme.bodySmall?.color,
-                                    ),
-                                  ),
-                              ],
-                            ),
+                            ],
                           ),
                           Row(
                             children: [
                               Text(
-                                '₹${amount.toString()}',
+                                '₹$amount',
                                 style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 14,
+                                  color: Color(0xFF10B981),
                                 ),
                               ),
-                              const SizedBox(width: 12),
-                              Chip(
-                                label: const Text('Paid'),
-                                backgroundColor: Colors.green.withOpacity(0.2),
+                              const SizedBox(width: 10),
+                              const Icon(
+                                Icons.check_circle_rounded,
+                                color: Color(0xFF10B981),
+                                size: 16,
                               ),
                             ],
                           ),
@@ -1262,18 +1493,21 @@ class _PaymentInfoItem extends StatelessWidget {
       children: [
         Text(
           label,
-          style: TextStyle(
-            fontSize: 12,
-            color: Theme.of(context).textTheme.bodySmall?.color,
+          style: const TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFF94A3B8),
+            letterSpacing: 0.5,
           ),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 6),
         Text(
           value,
           style: const TextStyle(
             fontSize: 16,
-            fontWeight: FontWeight.w600,
-            color: Color(0xFF14B8A6),
+            fontWeight: FontWeight.w800,
+            color: Color(0xFF1E293B),
+            letterSpacing: -0.2,
           ),
         ),
       ],
@@ -1297,10 +1531,15 @@ class _QuickActions extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Quick Actions',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+          'QUICK ACTIONS',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            color: Color(0xFF64748B),
+            letterSpacing: 1.2,
+          ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 16),
         LayoutBuilder(
           builder: (context, constraints) {
             final isCompact = constraints.maxWidth < 520;
@@ -1309,7 +1548,7 @@ class _QuickActions extends StatelessWidget {
                 children: [
                   _GradientActionButton(
                     label: 'Raise Complaint',
-                    icon: Icons.notifications_outlined,
+                    icon: Icons.add_moderator_rounded,
                     gradient: const LinearGradient(
                       colors: [Color(0xFFF97316), Color(0xFFFB923C)],
                     ),
@@ -1317,21 +1556,22 @@ class _QuickActions extends StatelessWidget {
                       // TODO: Navigate to raise complaint
                     },
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 12),
                   _GradientActionButton(
                     label: 'View Notices',
-                    icon: Icons.description_outlined,
+                    icon: Icons.notifications_active_rounded,
                     gradient: const LinearGradient(
-                      colors: [Color(0xFF6C63FF), Color(0xFF8B7BFF)],
+                      colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
                     ),
                     onTap: () {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => ResidentNoticesScreen(
-                            residentId: residentId,
-                            pgId: pgId,
-                          ),
+                          builder:
+                              (_) => ResidentNoticesScreen(
+                                residentId: residentId,
+                                pgId: pgId,
+                              ),
                         ),
                       );
                     },
@@ -1344,7 +1584,7 @@ class _QuickActions extends StatelessWidget {
                 Expanded(
                   child: _GradientActionButton(
                     label: 'Raise Complaint',
-                    icon: Icons.notifications_outlined,
+                    icon: Icons.add_moderator_rounded,
                     gradient: const LinearGradient(
                       colors: [Color(0xFFF97316), Color(0xFFFB923C)],
                     ),
@@ -1353,22 +1593,23 @@ class _QuickActions extends StatelessWidget {
                     },
                   ),
                 ),
-                const SizedBox(width: 14),
+                const SizedBox(width: 16),
                 Expanded(
                   child: _GradientActionButton(
                     label: 'View Notices',
-                    icon: Icons.description_outlined,
+                    icon: Icons.notifications_active_rounded,
                     gradient: const LinearGradient(
-                      colors: [Color(0xFF6C63FF), Color(0xFF8B7BFF)],
+                      colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
                     ),
                     onTap: () {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => ResidentNoticesScreen(
-                            residentId: residentId,
-                            pgId: pgId,
-                          ),
+                          builder:
+                              (_) => ResidentNoticesScreen(
+                                residentId: residentId,
+                                pgId: pgId,
+                              ),
                         ),
                       );
                     },
@@ -1417,42 +1658,44 @@ class _GradientActionButtonState extends State<_GradientActionButton> {
         scale: _pressed ? 0.98 : 1,
         child: Container(
           width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          height: 64,
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
           decoration: BoxDecoration(
             gradient: widget.gradient,
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(20),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.12),
-                blurRadius: 12,
-                offset: const Offset(0, 6),
+                color: widget.gradient.colors.first.withOpacity(0.3),
+                blurRadius: 15,
+                offset: const Offset(0, 8),
               ),
             ],
           ),
           child: Row(
             children: [
               Container(
-                height: 32,
-                width: 32,
+                height: 40,
+                width: 40,
                 decoration: BoxDecoration(
                   color: Colors.white.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(widget.icon, color: Colors.white, size: 18),
+                child: Icon(widget.icon, color: Colors.white, size: 20),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 16),
               Text(
                 widget.label,
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.2,
                 ),
               ),
               const Spacer(),
               const Icon(
-                Icons.arrow_forward_ios,
-                color: Colors.white,
+                Icons.arrow_forward_ios_rounded,
+                color: Colors.white30,
                 size: 14,
               ),
             ],
@@ -1470,16 +1713,72 @@ class _NoticesPreviewLoading extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: List.generate(
-        2,
-        (index) => Container(
-          margin: const EdgeInsets.only(bottom: 12),
-          height: 64,
-          decoration: BoxDecoration(
-            color: Theme.of(context).dividerColor.withOpacity(0.2),
-            borderRadius: BorderRadius.circular(12),
+        3,
+        (index) => _ShimmerEffect(
+          child: Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            height: 90,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+            ),
           ),
         ),
       ),
+    );
+  }
+}
+
+class _ShimmerEffect extends StatefulWidget {
+  final Widget child;
+  const _ShimmerEffect({required this.child});
+
+  @override
+  State<_ShimmerEffect> createState() => _ShimmerEffectState();
+}
+
+class _ShimmerEffectState extends State<_ShimmerEffect>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller =
+        AnimationController(
+          vsync: this,
+          duration: const Duration(milliseconds: 1500),
+        )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return ShaderMask(
+          blendMode: BlendMode.srcATop,
+          shaderCallback: (bounds) {
+            return LinearGradient(
+              colors: const [
+                Color(0xFFF1F5F9),
+                Color(0xFFE2E8F0),
+                Color(0xFFF1F5F9),
+              ],
+              stops: const [0.1, 0.5, 0.9],
+              begin: Alignment(-1.0 + _controller.value * 2, -0.3),
+              end: Alignment(0.0 + _controller.value * 2, 0.3),
+            ).createShader(bounds);
+          },
+          child: widget.child,
+        );
+      },
     );
   }
 }
@@ -1488,32 +1787,38 @@ class _NoticesEmptyCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        children: [
-          Container(
-            height: 64,
-            width: 64,
-            decoration: BoxDecoration(
-              color: Colors.teal.withOpacity(0.12),
-              shape: BoxShape.circle,
+      padding: const EdgeInsets.symmetric(vertical: 32),
+      child: Center(
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF6366F1).withOpacity(0.05),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.notifications_none_rounded,
+                color: Color(0xFF6366F1),
+                size: 32,
+              ),
             ),
-            child: const Icon(Icons.notifications_off, color: Colors.teal),
-          ),
-          const SizedBox(height: 12),
-          const Text(
-            'No Notices Yet',
-            style: TextStyle(fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'Admin announcements will appear here.',
-            style: TextStyle(
-              fontSize: 12,
-              color: Theme.of(context).textTheme.bodySmall?.color,
+            const SizedBox(height: 16),
+            const Text(
+              'All Caught Up!',
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 15,
+                color: Color(0xFF334155),
+              ),
             ),
-          ),
-        ],
+            const SizedBox(height: 4),
+            const Text(
+              'No new announcements for you',
+              style: TextStyle(fontSize: 13, color: Color(0xFF94A3B8)),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1566,11 +1871,18 @@ class _ComplaintsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: Theme.of(context).dividerColor),
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+        border: Border.all(color: const Color(0xFFF1F5F9)),
       ),
       child: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance
@@ -1584,7 +1896,7 @@ class _ComplaintsCard extends StatelessWidget {
           final totalCount = docs.length;
 
           return Padding(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(24),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1594,40 +1906,42 @@ class _ComplaintsCard extends StatelessWidget {
                     Row(
                       children: [
                         Container(
-                          padding: const EdgeInsets.all(8),
+                          padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
-                            color: Colors.orange.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(8),
+                            color: const Color(0xFFF59E0B).withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(12),
                           ),
                           child: const Icon(
-                            Icons.notifications_outlined,
-                            color: Colors.orange,
+                            Icons.error_outline_rounded,
+                            color: Color(0xFFF59E0B),
+                            size: 24,
                           ),
                         ),
-                        const SizedBox(width: 12),
+                        const SizedBox(width: 14),
                         const Text(
-                          'My Complaints',
+                          'Complaints',
                           style: TextStyle(
                             fontSize: 18,
-                            fontWeight: FontWeight.w600,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: -0.5,
                           ),
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 10),
                         Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 8,
-                            vertical: 4,
+                            vertical: 3,
                           ),
                           decoration: BoxDecoration(
-                            color: Colors.orange.withOpacity(0.12),
-                            borderRadius: BorderRadius.circular(10),
+                            color: const Color(0xFFF59E0B).withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
                           ),
                           child: Text(
                             totalCount.toString(),
                             style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.orange,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFFF59E0B),
                             ),
                           ),
                         ),
@@ -1637,35 +1951,61 @@ class _ComplaintsCard extends StatelessWidget {
                       onPressed: () {
                         // TODO: View all complaints
                       },
-                      child: const Text('View All'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: const Color(0xFF64748B),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                      ),
+                      child: const Text(
+                        'View All',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 24),
                 if (docs.isEmpty)
                   Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      children: [
-                        Icon(
-                          Icons.check_circle_outline,
-                          color: Colors.green.withOpacity(0.6),
-                          size: 40,
-                        ),
-                        const SizedBox(height: 12),
-                        const Text(
-                          'No Complaints',
-                          style: TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          'You are all set. No pending issues.',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Theme.of(context).textTheme.bodySmall?.color,
+                    padding: const EdgeInsets.symmetric(vertical: 32),
+                    child: Center(
+                      child: Column(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF10B981).withOpacity(0.05),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.verified_rounded,
+                              color: Color(0xFF10B981),
+                              size: 32,
+                            ),
                           ),
-                        ),
-                      ],
+                          const SizedBox(height: 16),
+                          const Text(
+                            'All Clean!',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 15,
+                              color: Color(0xFF334155),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            'No pending complaints found',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Color(0xFF94A3B8),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   )
                 else
@@ -1677,24 +2017,21 @@ class _ComplaintsCard extends StatelessWidget {
                       final status =
                           data['status']?.toString().toLowerCase() ?? '';
                       final createdAt = data['createdAt'] as Timestamp?;
-                      final priority =
-                          data['priority']?.toString().toLowerCase() ?? '';
 
                       final isResolved =
                           status == 'resolved' || status == 'closed';
-                      final badgeColor = isResolved
-                          ? Colors.green
-                          : Colors.orange;
+                      final badgeColor =
+                          isResolved
+                              ? const Color(0xFF10B981)
+                              : const Color(0xFFF59E0B);
 
                       return Container(
                         margin: const EdgeInsets.only(bottom: 12),
-                        padding: const EdgeInsets.all(14),
+                        padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
-                          color: Theme.of(context).cardColor,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: Theme.of(context).dividerColor,
-                          ),
+                          color: const Color(0xFFF8FAFC),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: const Color(0xFFF1F5F9)),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1704,73 +2041,59 @@ class _ComplaintsCard extends StatelessWidget {
                                 Expanded(
                                   child: Text(
                                     title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(
-                                      fontWeight: FontWeight.w600,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 14,
+                                      color: Color(0xFF334155),
                                     ),
                                   ),
                                 ),
                                 Container(
                                   padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
+                                    horizontal: 8,
                                     vertical: 4,
                                   ),
                                   decoration: BoxDecoration(
-                                    color: badgeColor.withOpacity(0.12),
-                                    borderRadius: BorderRadius.circular(10),
+                                    color: badgeColor.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(8),
                                   ),
                                   child: Text(
-                                    isResolved ? 'Resolved' : 'In Progress',
+                                    isResolved ? 'Resolved' : 'Review',
                                     style: TextStyle(
-                                      fontSize: 11,
+                                      fontSize: 10,
                                       color: badgeColor,
-                                      fontWeight: FontWeight.w600,
+                                      fontWeight: FontWeight.w800,
                                     ),
                                   ),
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 6),
-                            Text(
-                              'Category: $category',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Theme.of(
-                                  context,
-                                ).textTheme.bodySmall?.color,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
+                            const SizedBox(height: 10),
                             Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
+                                Text(
+                                  category.toString().toUpperCase(),
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w800,
+                                    color: Color(0xFF94A3B8),
+                                    letterSpacing: 0.5,
+                                  ),
+                                ),
                                 Text(
                                   createdAt != null
                                       ? DateFormat(
-                                          'MMM dd, yyyy',
-                                        ).format(createdAt.toDate())
+                                        'MMM dd, yyyy',
+                                      ).format(createdAt.toDate())
                                       : '-',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Theme.of(
-                                      context,
-                                    ).textTheme.bodySmall?.color,
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: Color(0xFF94A3B8),
                                   ),
                                 ),
-                                const Spacer(),
-                                if (priority.isNotEmpty)
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 4,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.grey.withOpacity(0.15),
-                                      borderRadius: BorderRadius.circular(10),
-                                    ),
-                                    child: Text(
-                                      priority,
-                                      style: const TextStyle(fontSize: 11),
-                                    ),
-                                  ),
                               ],
                             ),
                           ],
@@ -1835,6 +2158,15 @@ class _NoticesPreviewCard extends StatelessWidget {
         .snapshots();
   }
 
+  Stream<Set<String>> _readStatusStream() {
+    return FirebaseFirestore.instance
+        .collection('residents')
+        .doc(residentId)
+        .collection('readStatus')
+        .snapshots()
+        .map((snapshot) => snapshot.docs.map((doc) => doc.id).toSet());
+  }
+
   List<QueryDocumentSnapshot> _mergeNotices(
     List<QueryDocumentSnapshot> a,
     List<QueryDocumentSnapshot> b,
@@ -1863,12 +2195,8 @@ class _NoticesPreviewCard extends StatelessWidget {
     return merged.take(3).toList();
   }
 
-  bool _isRead(Map<String, dynamic> data) {
-    final readers = data['readBy'];
-    if (readers is Iterable) {
-      return readers.contains(residentId);
-    }
-    return false;
+  bool _isRead(String noticeId, Set<String> readIds) {
+    return readIds.contains(noticeId);
   }
 
   String _formatDate(Timestamp? createdAt) {
@@ -1881,12 +2209,21 @@ class _NoticesPreviewCard extends StatelessWidget {
     if (pgId == null || pgId!.isEmpty) {
       return _NoticesEmptyCard();
     }
-    return Card(
-      elevation: 2,
-      shadowColor: Colors.black.withOpacity(0.08),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+        border: Border.all(color: const Color(0xFFF1F5F9)),
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1896,29 +2233,30 @@ class _NoticesPreviewCard extends StatelessWidget {
                 Row(
                   children: [
                     Container(
-                      padding: const EdgeInsets.all(8),
+                      padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF6C63FF).withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(8),
+                        color: const Color(0xFF6366F1).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
                       ),
                       child: const Icon(
-                        Icons.description_outlined,
-                        color: Color(0xFF6C63FF),
+                        Icons.campaign_outlined,
+                        color: Color(0xFF6366F1),
+                        size: 24,
                       ),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 14),
                     const Text(
-                      'Recent Notices',
+                      'Announcements',
                       style: TextStyle(
                         fontSize: 18,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.5,
                       ),
                     ),
                   ],
                 ),
                 TextButton(
                   onPressed: () {
-                    if (pgId == null) return;
                     Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -1929,187 +2267,257 @@ class _NoticesPreviewCard extends StatelessWidget {
                       ),
                     );
                   },
-                  child: const Text('View All'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFF6366F1),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  child: const Text(
+                    'View All',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            StreamBuilder<QuerySnapshot>(
-              stream: _allNoticesStream(),
-              builder: (context, allSnap) {
-                if (allSnap.hasError) {
-                  return _NoticesEmptyCard();
-                }
-                if (allSnap.connectionState == ConnectionState.waiting) {
-                  return const _NoticesPreviewLoading();
-                }
-                final allDocs = allSnap.data?.docs ?? [];
+            const SizedBox(height: 20),
+            StreamBuilder<Set<String>>(
+              stream: _readStatusStream(),
+              builder: (context, readStatusSnap) {
+                final readIds = readStatusSnap.data ?? {};
 
-                final hostelStream = pgId == null
-                    ? Stream<QuerySnapshot?>.value(null)
-                    : _hostelNoticesStream();
-                return StreamBuilder<QuerySnapshot?>(
-                  stream: hostelStream,
-                  builder: (context, hostelSnap) {
-                    if (hostelSnap.hasError) {
-                      return _NoticesEmptyCard();
-                    }
-                    if (pgId != null &&
-                        hostelSnap.connectionState == ConnectionState.waiting) {
-                      return const _NoticesPreviewLoading();
-                    }
-                    final hostelDocs = hostelSnap.data?.docs ?? [];
+                return StreamBuilder<QuerySnapshot>(
+                  stream: _allNoticesStream(),
+                  builder: (context, allSnap) {
+                    final hostelStream = pgId == null
+                        ? Stream<QuerySnapshot?>.value(null)
+                        : _hostelNoticesStream();
 
-                    return StreamBuilder<QuerySnapshot>(
-                      stream: _residentNoticesStream(),
-                      builder: (context, residentSnap) {
-                        if (residentSnap.hasError) {
-                          return _NoticesEmptyCard();
-                        }
-                        if (residentSnap.connectionState ==
-                            ConnectionState.waiting) {
-                          return const _NoticesPreviewLoading();
-                        }
+                    return StreamBuilder<QuerySnapshot?>(
+                      stream: hostelStream,
+                      builder: (context, hostelSnap) {
+                        return StreamBuilder<QuerySnapshot>(
+                          stream: _residentNoticesStream(),
+                          builder: (context, residentSnap) {
+                            if (allSnap.connectionState ==
+                                    ConnectionState.waiting ||
+                                (pgId != null &&
+                                    hostelSnap.connectionState ==
+                                        ConnectionState.waiting) ||
+                                residentSnap.connectionState ==
+                                    ConnectionState.waiting) {
+                              return const _NoticesPreviewLoading();
+                            }
 
-                        final residentDocs = residentSnap.data?.docs ?? [];
-                        final merged = _mergeNotices(
-                          allDocs,
-                          hostelDocs,
-                          residentDocs,
-                        );
+                            final allDocs = allSnap.data?.docs ?? [];
+                            final hostelDocs = hostelSnap.data?.docs ?? [];
+                            final residentDocs = residentSnap.data?.docs ?? [];
+                            final merged = _mergeNotices(
+                              allDocs,
+                              hostelDocs,
+                              residentDocs,
+                            );
 
-                        if (merged.isEmpty) {
-                          return _NoticesEmptyCard();
-                        }
+                            if (merged.isEmpty) {
+                              return _NoticesEmptyCard();
+                            }
 
-                        return Column(
-                          children: merged.map((doc) {
-                            final data = doc.data() as Map<String, dynamic>;
-                            final title = (data['title'] ?? 'Notice')
-                                .toString();
-                            final message = (data['message'] ?? '').toString();
-                            final createdAt = data['createdAt'] as Timestamp?;
-                            final isRead = _isRead(data);
-                            final noticeType = (data['noticeType'] ?? 'Notice')
-                                .toString();
+                            return Column(
+                              children: merged.map((doc) {
+                                final data = doc.data() as Map<String, dynamic>;
+                                final title = (data['title'] ?? 'Notice')
+                                    .toString();
+                                final message =
+                                    (data['message'] ?? '').toString();
+                                final createdAt =
+                                    data['createdAt'] as Timestamp?;
+                                final isRead = _isRead(doc.id, readIds);
+                                final noticeType =
+                                    (data['noticeType'] ?? 'Notice').toString();
 
-                            return Container(
-                              margin: const EdgeInsets.only(bottom: 12),
-                              padding: const EdgeInsets.all(14),
-                              decoration: BoxDecoration(
-                                color: Theme.of(context).cardColor,
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: Theme.of(context).dividerColor,
-                                ),
-                              ),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Container(
-                                    width: 6,
-                                    height: 52,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF14B8A6),
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            Expanded(
-                                              child: Text(
-                                                title,
-                                                style: const TextStyle(
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                              ),
-                                            ),
-                                            Container(
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                    horizontal: 8,
-                                                    vertical: 4,
-                                                  ),
-                                              decoration: BoxDecoration(
-                                                color: const Color(
-                                                  0xFF6C63FF,
-                                                ).withOpacity(0.12),
-                                                borderRadius:
-                                                    BorderRadius.circular(10),
-                                              ),
-                                              child: Text(
-                                                noticeType,
-                                                style: const TextStyle(
-                                                  fontSize: 10,
-                                                  color: Color(0xFF6C63FF),
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 6),
-                                        Text(
-                                          message.isEmpty
-                                              ? 'No message provided.'
-                                              : message,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: Theme.of(
-                                              context,
-                                            ).textTheme.bodySmall?.color,
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 12),
+                                  child: InkWell(
+                                    onTap: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => ResidentNoticesScreen(
+                                            residentId: residentId,
+                                            pgId: pgId,
                                           ),
                                         ),
-                                        const SizedBox(height: 6),
-                                        Row(
-                                          children: [
-                                            Text(
-                                              _formatDate(createdAt),
-                                              style: TextStyle(
-                                                fontSize: 11,
-                                                color: Theme.of(
-                                                  context,
-                                                ).textTheme.bodySmall?.color,
-                                              ),
-                                            ),
-                                            const Spacer(),
-                                            if (!isRead)
-                                              Container(
-                                                width: 8,
-                                                height: 8,
-                                                decoration: const BoxDecoration(
-                                                  color: Colors.teal,
-                                                  shape: BoxShape.circle,
-                                                ),
-                                              ),
-                                          ],
+                                      );
+                                    },
+                                    borderRadius: BorderRadius.circular(16),
+                                    child: Container(
+                                      padding: const EdgeInsets.all(16),
+                                      decoration: BoxDecoration(
+                                        color: isRead
+                                            ? const Color(0xFFF8FAFC)
+                                            : Colors.white,
+                                        borderRadius: BorderRadius.circular(20),
+                                        border: Border.all(
+                                          color: isRead
+                                              ? const Color(0xFFF1F5F9)
+                                              : const Color(0xFF6366F1)
+                                                  .withOpacity(0.1),
                                         ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            );
-                          }).toList(),
-                        );
-                      },
-                    );
-                  },
-                );
-              },
-            ),
-          ],
-        ),
-      ),
-    );
+                                        boxShadow: isRead
+                                            ? []
+                                            : [
+                                                BoxShadow(
+                                                  color: const Color(0xFF6366F1)
+                                                      .withOpacity(0.05),
+                                                  blurRadius: 10,
+                                                  offset: const Offset(0, 4),
+                                                ),
+                                              ],
+                                            ),
+                                      child: Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Container(
+                                            width: 4,
+                                            height: 40,
+                                            decoration: BoxDecoration(
+                                              color: _getNoticeColor(
+                                                noticeType,
+                                              ),
+                                              borderRadius:
+                                                  BorderRadius.circular(2),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 16),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Row(
+                                                  children: [
+                                                    Expanded(
+                                                        child: Text(
+                                                          title,
+                                                          maxLines: 1,
+                                                          overflow:
+                                                              TextOverflow
+                                                                  .ellipsis,
+                                                          style: TextStyle(
+                                                            fontSize: 14,
+                                                            fontWeight:
+                                                                isRead
+                                                                    ? FontWeight
+                                                                        .w600
+                                                                    : FontWeight
+                                                                        .w700,
+                                                            color: const Color(
+                                                              0xFF1E293B,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                    ),
+                                                    if (!isRead)
+                                                      Container(
+                                                        width: 8,
+                                                        height: 8,
+                                                        decoration:
+                                                            const BoxDecoration(
+                                                              color: Color(
+                                                                0xFF6366F1,
+                                                              ),
+                                                              shape: BoxShape
+                                                                  .circle,
+                                                            ),
+                                                      ),
+                                                  ],
+                                                ),
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                    message,
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      fontSize: 12,
+                                                      color: Color(0xFF64748B),
+                                                    ),
+                                                  ),
+                                                const SizedBox(height: 8),
+                                                Row(
+                                                  mainAxisAlignment:
+                                                      MainAxisAlignment
+                                                          .spaceBetween,
+                                                  children: [
+                                                    Text(
+                                                      _formatDate(createdAt),
+                                                      style: const TextStyle(
+                                                        fontSize: 11,
+                                                        color: Color(
+                                                          0xFF94A3B8,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                     Container(
+                                                       padding: const EdgeInsets.symmetric(
+                                                         horizontal: 8,
+                                                         vertical: 2,
+                                                       ),
+                                                       decoration: BoxDecoration(
+                                                         color: _getNoticeColor(
+                                                           noticeType,
+                                                         ).withOpacity(0.1),
+                                                         borderRadius: BorderRadius.circular(6),
+                                                       ),
+                                                       child: Text(
+                                                         noticeType.toUpperCase(),
+                                                         style: TextStyle(
+                                                           fontSize: 10,
+                                                           fontWeight: FontWeight.w700,
+                                                           color: _getNoticeColor(noticeType),
+                                                         ),
+                                                       ),
+                                                     ),
+                                                   ],
+                                                 ),
+                                               ],
+                                             ),
+                                           ),
+                                         ],
+                                       ),
+                                     ),
+                                   ),
+                                 );
+                               }).toList(),
+                             );
+                           },
+                         );
+                       },
+                     );
+                   },
+                 );
+               },
+             ),
+           ],
+         ),
+       ),
+     );
+   }
+
+  Color _getNoticeColor(String type) {
+    switch (type.toLowerCase()) {
+      case 'warning':
+        return const Color(0xFFEF4444);
+      case 'maintenance':
+        return const Color(0xFFF59E0B);
+      case 'payment':
+        return const Color(0xFF10B981);
+      default:
+        return const Color(0xFF6366F1);
+    }
   }
 }
 
@@ -2150,9 +2558,6 @@ class _AllocationPendingCard extends StatelessWidget {
                   const SizedBox(height: 8),
                   Text(
                     'Your account is registered. Room allocation will appear here once assigned.',
-                    style: TextStyle(
-                      color: Theme.of(context).textTheme.bodySmall?.color,
-                    ),
                   ),
                 ],
               ),

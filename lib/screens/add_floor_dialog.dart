@@ -2,6 +2,9 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../utils/admin_design_system.dart';
+import '../widgets/admin_widgets.dart';
+
 class AddFloorDialog extends StatefulWidget {
   final String hostelId;
   final String pgId;
@@ -19,243 +22,172 @@ class AddFloorDialog extends StatefulWidget {
 }
 
 class _AddFloorDialogState extends State<AddFloorDialog> {
-  final TextEditingController _floorNumberController = TextEditingController();
-  final TextEditingController _floorNameController = TextEditingController();
-
+  final _formKey = GlobalKey<FormState>();
+  final _floorNumberController = TextEditingController();
+  final _floorNameController = TextEditingController();
+  final _notesController = TextEditingController();
   bool _isLoading = false;
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
+  void dispose() {
+    _floorNumberController.dispose();
+    _floorNameController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
 
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    // Confirmation dialog
+    final confirmed = await showAdminConfirmDialog(
+      context,
+      title: 'Add Floor?',
+      message: 'Add "${_floorNameController.text.trim()}" to this hostel?',
+      confirmLabel: 'Add Floor',
+    );
+    if (!confirmed || !mounted) return;
+
+    setState(() => _isLoading = true);
+    try {
+      final hostelRef = FirebaseFirestore.instance.collection('hostels').doc(widget.hostelId);
+      final pgRef = widget.pgId.isNotEmpty ? hostelRef.collection('pgs').doc(widget.pgId) : null;
+
+      await FirebaseFirestore.instance.runTransaction((tx) async {
+        int currentFloors = 0;
+        DocumentReference floorRef;
+
+        if (pgRef != null) {
+          final pgSnap = await tx.get(pgRef);
+          currentFloors = pgSnap.data()?['floors'] ?? 0;
+          floorRef = pgRef.collection('floors').doc();
+          tx.update(pgRef, {'floors': currentFloors + 1});
+        } else {
+          final hostelSnap = await tx.get(hostelRef);
+          currentFloors = hostelSnap.data()?['floors'] ?? 0;
+          floorRef = hostelRef.collection('floors').doc();
+          tx.update(hostelRef, {'floors': currentFloors + 1});
+        }
+
+        tx.set(floorRef, {
+          'floorIndex': currentFloors,
+          'floorName': _floorNameController.text.trim(),
+          'floorNumber': int.tryParse(_floorNumberController.text.trim()) ?? currentFloors,
+          'notes': _notesController.text.trim(),
+          'adminId': widget.adminId,
+          'totalRooms': 0,
+          'totalBeds': 0,
+          'availableBeds': 0,
+          'hostelId': widget.hostelId,
+          'pgId': widget.pgId,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      });
+
+      if (!mounted) return;
+      Navigator.pop(context);
+      await showAdminSuccessDialog(
+        context,
+        title: 'Floor Added!',
+        message: '"${_floorNameController.text.trim()}" has been added successfully.',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to add floor: $e')));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Dialog(
       backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.all(24),
+      insetPadding: const EdgeInsets.all(20),
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
         child: Center(
           child: Container(
-            width: 420,
+            width: 460,
             decoration: BoxDecoration(
-              color: theme.cardColor,
-              borderRadius: BorderRadius.circular(18),
-              border: theme.brightness == Brightness.dark
-                  ? Border.all(color: cs.outline)
-                  : null,
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x26000000),
-                  blurRadius: 30,
-                  offset: Offset(0, 20),
-                ),
-              ],
+              color: isDark ? const Color(0xFF1E2130) : Colors.white,
+              borderRadius: AdminRadius.xl,
+              boxShadow: AdminShadows.cardHover,
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [_header(context), _body(context)],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ───────────────── HEADER ─────────────────
-  Widget _header(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Color(0xFF00BFA5), Color(0xFF80DEEA)],
-        ),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Icon(Icons.layers, color: Colors.white),
-          ),
-          const SizedBox(width: 12),
-          const Expanded(
-            child: Text(
-              'Add New Floor',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          InkWell(
-            onTap: () => Navigator.pop(context),
-            child: const Icon(Icons.close, color: Colors.white),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ───────────────── BODY ─────────────────
-  Widget _body(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Padding(
-      padding: const EdgeInsets.all(22),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _label(context, 'Floor Number *'),
-          const SizedBox(height: 6),
-          _inputField(
-            context,
-            controller: _floorNumberController,
-            hint: 'e.g., 1',
-            keyboardType: TextInputType.number,
-          ),
-          const SizedBox(height: 18),
-          _label(context, 'Floor Name *'),
-          const SizedBox(height: 6),
-          _inputField(
-            context,
-            controller: _floorNameController,
-            hint: 'e.g., Ground Floor',
-          ),
-          const SizedBox(height: 14),
-          Text(
-            'You’ll be able to add rooms and configure sharing options for this floor in the next step',
-            style: theme.textTheme.bodySmall?.copyWith(height: 1.4),
-          ),
-          const SizedBox(height: 22),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: _isLoading ? null : () => Navigator.pop(context),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+            child: Form(
+              key: _formKey,
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                // Header
+                Container(
+                  padding: const EdgeInsets.all(18),
+                  decoration: const BoxDecoration(
+                    gradient: AdminGradients.teal,
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
                   ),
-                  child: const Text('Cancel'),
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: _isLoading ? null : _addFloor,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF009688),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+                  child: Row(children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(10)),
+                      child: const Icon(Icons.layers_rounded, color: Colors.white, size: 20),
                     ),
-                  ),
-                  child: _isLoading
-                      ? const SizedBox(
-                          height: 18,
-                          width: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Text(
-                          'Add Floor',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w600,
-                          ),
+                    const SizedBox(width: 12),
+                    const Expanded(child: Text('Add New Floor', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700, fontFamily: 'Inter'))),
+                    InkWell(onTap: () => Navigator.pop(context), child: const Icon(Icons.close_rounded, color: Colors.white)),
+                  ]),
+                ),
+                // Body
+                Padding(
+                  padding: const EdgeInsets.all(22),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [
+                      Expanded(child: AdminTextField(
+                        label: 'Floor Number *', hint: 'e.g., 1',
+                        controller: _floorNumberController,
+                        keyboardType: TextInputType.number,
+                        validator: (v) => v == null || v.trim().isEmpty ? 'Required' : null,
+                      )),
+                      const SizedBox(width: 14),
+                      Expanded(child: AdminTextField(
+                        label: 'Floor Name *', hint: 'e.g., Ground Floor',
+                        controller: _floorNameController,
+                        validator: (v) => v == null || v.trim().isEmpty ? 'Required' : null,
+                      )),
+                    ]),
+                    const SizedBox(height: 16),
+                    AdminTextField(
+                      label: 'Notes (Optional)', hint: 'Any notes about this floor...',
+                      controller: _notesController,
+                      maxLines: 2,
+                    ),
+                    const SizedBox(height: 12),
+                    const AdminInfoBanner(message: "You'll be able to add rooms and configure sharing options for this floor after creation."),
+                    const SizedBox(height: 22),
+                    Row(children: [
+                      Expanded(child: OutlinedButton(
+                        onPressed: _isLoading ? null : () => Navigator.pop(context),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          side: const BorderSide(color: AdminColors.cardBorder),
                         ),
+                        child: const Text('Cancel', style: TextStyle(fontFamily: 'Inter')),
+                      )),
+                      const SizedBox(width: 14),
+                      Expanded(child: AdminPrimaryButton(
+                        label: 'Add Floor',
+                        icon: Icons.add_rounded,
+                        gradient: AdminGradients.teal,
+                        isLoading: _isLoading,
+                        height: 48,
+                        onPressed: _submit,
+                      )),
+                    ]),
+                  ]),
                 ),
-              ),
-            ],
+              ]),
+            ),
           ),
-        ],
-      ),
-    );
-  }
-
-  // ───────────────── FIRESTORE LOGIC ─────────────────
-  Future<void> _addFloor() async {
-    if (_floorNameController.text.trim().isEmpty) return;
-
-    setState(() => _isLoading = true);
-
-    final hostelRef = FirebaseFirestore.instance
-        .collection('hostels')
-        .doc(widget.hostelId);
-    final pgRef = hostelRef.collection('pgs').doc(widget.pgId);
-
-    await FirebaseFirestore.instance.runTransaction((transaction) async {
-      final pgSnap = await transaction.get(pgRef);
-
-      final currentFloors = pgSnap.data()?['floors'] ?? 0;
-      final newFloorIndex = currentFloors;
-
-      final floorRef = pgRef.collection('floors').doc();
-
-      transaction.set(floorRef, {
-        'floorIndex': newFloorIndex,
-        'floorName': _floorNameController.text.trim(),
-        'adminId': widget.adminId,
-        'totalRooms': 0,
-        'totalBeds': 0,
-        'availableBeds': 0,
-        'createdAt': FieldValue.serverTimestamp(),
-        'hostelId': widget.hostelId,
-        'pgId': widget.pgId,
-      });
-
-      transaction.update(pgRef, {'floors': currentFloors + 1});
-    });
-
-    if (mounted) Navigator.pop(context);
-  }
-
-  // ───────────────── HELPERS ─────────────────
-  Widget _label(BuildContext context, String text) {
-    return Text(
-      text,
-      style: Theme.of(
-        context,
-      ).textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w500),
-    );
-  }
-
-  Widget _inputField(
-    BuildContext context, {
-    required String hint,
-    required TextEditingController controller,
-    TextInputType keyboardType = TextInputType.text,
-  }) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-
-    return TextField(
-      controller: controller,
-      keyboardType: keyboardType,
-      decoration: InputDecoration(
-        hintText: hint,
-        filled: true,
-        fillColor: theme.colorScheme.surfaceVariant,
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 14,
-          vertical: 14,
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: cs.outline),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: Color(0xFF009688)),
         ),
       ),
     );

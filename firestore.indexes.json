@@ -38,9 +38,10 @@
     "collectionGroup": "notices",
     "queryScope": "COLLECTION",
     "fields": [
-      { "fieldPath": "pgIds", "arrayConfig": "CONTAINS" },
       { "fieldPath": "scope", "order": "ASCENDING" },
+      { "fieldPath": "senderRole", "order": "ASCENDING" },
       { "fieldPath": "isActive", "order": "ASCENDING" },
+      { "fieldPath": "pgIds", "arrayConfig": "CONTAINS" },
       { "fieldPath": "createdAt", "order": "DESCENDING" }
     ]
   },
@@ -48,9 +49,10 @@
     "collectionGroup": "notices",
     "queryScope": "COLLECTION",
     "fields": [
-      { "fieldPath": "residentIds", "arrayConfig": "CONTAINS" },
       { "fieldPath": "scope", "order": "ASCENDING" },
+      { "fieldPath": "senderRole", "order": "ASCENDING" },
       { "fieldPath": "isActive", "order": "ASCENDING" },
+      { "fieldPath": "residentIds", "arrayConfig": "CONTAINS" },
       { "fieldPath": "createdAt", "order": "DESCENDING" }
     ]
   }
