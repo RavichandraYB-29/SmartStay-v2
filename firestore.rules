@@ -250,6 +250,12 @@ service cloud.firestore {
       allow read: if isSignedIn()
         && resource.data.authUid == request.auth.uid;
 
+      // Resident can read roommates (other residents in the same room)
+      allow read: if isSignedIn()
+        && hasResidentRecord()
+        && resource.data.roomId != null
+        && residentDocForUser().data.roomId == resource.data.roomId;
+
       // Resident activates after verification
       allow update: if isSignedIn()
         && resource.data.authUid == request.auth.uid
@@ -264,10 +270,24 @@ service cloud.firestore {
     /* ───────── COMPLAINTS ───────── */
 
     match /complaints/{complaintId} {
-      allow create: if isSignedIn() && isSelf(request.resource.data);
-      allow read, update, delete: if isAdminOwner(resource.data)
-        || isOwner(resource.data)
-        || isSelf(resource.data);
+      // Any signed-in user can create a complaint
+      allow create: if isSignedIn();
+
+      // Admin can read ALL complaints (collection query),
+      // resident can read their own complaints
+      allow read: if isAdmin()
+        || (isSignedIn() && resource.data.residentId != null
+            && hasResidentRecord()
+            && userDoc().data.residentId == resource.data.residentId);
+
+      // Admin can update status; resident can update own complaint
+      allow update: if isAdmin()
+        || (isSignedIn() && resource.data.residentId != null
+            && hasResidentRecord()
+            && userDoc().data.residentId == resource.data.residentId);
+
+      // Only admin can delete complaints
+      allow delete: if isAdmin();
     }
 
     /* ───────── PAYMENTS ───────── */

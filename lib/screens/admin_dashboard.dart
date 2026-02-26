@@ -107,6 +107,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     _UpcomingFeeDuesCard(adminId: adminId),
                   ]);
                 }),
+                const SizedBox(height: 28),
+                // ── Complaints Management ────────────────
+                _ComplaintsCard(adminId: adminId),
               ],
             ),
           ),
@@ -760,6 +763,676 @@ class _FeeDueTile extends StatelessWidget {
       ),
     );
   }
+}
+
+// ─────────────────────────────────────────────
+// COMPLAINTS MANAGEMENT
+// ─────────────────────────────────────────────
+class _ComplaintsCard extends StatelessWidget {
+  final String adminId;
+  const _ComplaintsCard({required this.adminId});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 20, offset: const Offset(0, 8))],
+        border: Border.all(color: const Color(0xFFF1F5F9)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF7ED),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.report_problem_rounded, size: 20, color: Color(0xFFF97316)),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'Resident Complaints',
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                  fontFamily: 'Inter',
+                  letterSpacing: -0.3,
+                ),
+              ),
+            ),
+            StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('complaints')
+                  .where('status', isEqualTo: 'pending')
+                  .snapshots(),
+              builder: (ctx, snap) {
+                final count = snap.data?.docs.length ?? 0;
+                if (count == 0) return const SizedBox.shrink();
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEF4444),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    '$count pending',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                      fontFamily: 'Inter',
+                    ),
+                  ),
+                );
+              },
+            ),
+          ]),
+          const SizedBox(height: 20),
+          StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('complaints')
+                .snapshots(),
+            builder: (ctx, snap) {
+              if (snap.hasError) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
+                  child: Center(
+                    child: Text(
+                      'Error loading complaints: ${snap.error}',
+                      style: const TextStyle(color: Color(0xFFEF4444), fontSize: 12, fontFamily: 'Inter'),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                );
+              }
+              if (!snap.hasData) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                );
+              }
+              final allDocs = snap.data!.docs;
+              // Sort by createdAt descending on client side
+              allDocs.sort((a, b) {
+                final aTs = (a.data() as Map<String, dynamic>)['createdAt'] as Timestamp?;
+                final bTs = (b.data() as Map<String, dynamic>)['createdAt'] as Timestamp?;
+                if (aTs == null && bTs == null) return 0;
+                if (aTs == null) return 1;
+                if (bTs == null) return -1;
+                return bTs.compareTo(aTs);
+              });
+              // Filter out resolved/closed complaints
+              final activeDocs = allDocs.where((doc) {
+                final s = ((doc.data() as Map<String, dynamic>)['status'] ?? 'pending').toString().toLowerCase();
+                return s != 'resolved' && s != 'closed';
+              }).take(10).toList();
+              final docs = activeDocs;
+              if (docs.isEmpty) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Center(
+                    child: Text(
+                      'No complaints yet',
+                      style: TextStyle(
+                        color: Color(0xFF94A3B8),
+                        fontSize: 13,
+                        fontFamily: 'Inter',
+                      ),
+                    ),
+                  ),
+                );
+              }
+              return Column(
+                children: docs.map((doc) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  return _ComplaintTile(
+                    docId: doc.id,
+                    data: data,
+                  );
+                }).toList(),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ComplaintTile extends StatelessWidget {
+  final String docId;
+  final Map<String, dynamic> data;
+
+  const _ComplaintTile({required this.docId, required this.data});
+
+  Color _priorityColor(String priority) {
+    switch (priority.toLowerCase()) {
+      case 'high':
+        return const Color(0xFFEF4444);
+      case 'medium':
+        return const Color(0xFFF59E0B);
+      default:
+        return const Color(0xFF64748B);
+    }
+  }
+
+  Color _statusColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'resolved':
+      case 'closed':
+        return const Color(0xFF10B981);
+      case 'in progress':
+        return const Color(0xFF3B82F6);
+      default:
+        return const Color(0xFFF59E0B);
+    }
+  }
+
+  String _statusLabel(String status) {
+    switch (status.toLowerCase()) {
+      case 'resolved':
+        return 'Resolved';
+      case 'closed':
+        return 'Closed';
+      case 'in progress':
+        return 'In Progress';
+      default:
+        return 'Pending';
+    }
+  }
+
+  String _timeAgo(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return DateFormat('MMM dd').format(dt);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final title = (data['title'] ?? 'Untitled').toString();
+    final category = (data['category'] ?? '').toString();
+    final priority = (data['priority'] ?? 'low').toString();
+    final status = (data['status'] ?? 'pending').toString();
+    final roomNumber = data['roomNumber']?.toString();
+    final createdAt = data['createdAt'] as Timestamp?;
+
+    return InkWell(
+      onTap: () => _showComplaintDetail(context, docId, data),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 4),
+        decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: Color(0xFFF1F5F9))),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Priority indicator
+            Container(
+              width: 4,
+              height: 48,
+              margin: const EdgeInsets.only(right: 14),
+              decoration: BoxDecoration(
+                color: _priorityColor(priority),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                            fontFamily: 'Inter',
+                            letterSpacing: -0.1,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: _statusColor(status).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          _statusLabel(status),
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: _statusColor(status),
+                            fontFamily: 'Inter',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      if (category.isNotEmpty) ...[
+                        Icon(Icons.label_outline_rounded, size: 13, color: const Color(0xFF94A3B8)),
+                        const SizedBox(width: 4),
+                        Text(
+                          category,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFF94A3B8),
+                            fontFamily: 'Inter',
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                      ],
+                      if (roomNumber != null && roomNumber != '-') ...[
+                        Icon(Icons.meeting_room_outlined, size: 13, color: const Color(0xFF94A3B8)),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Room $roomNumber',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFF94A3B8),
+                            fontFamily: 'Inter',
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                      ],
+                      if (createdAt != null) ...[
+                        Icon(Icons.access_time_rounded, size: 13, color: const Color(0xFF94A3B8)),
+                        const SizedBox(width: 4),
+                        Text(
+                          _timeAgo(createdAt.toDate()),
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFF94A3B8),
+                            fontFamily: 'Inter',
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded, color: Color(0xFFCBD5E1), size: 20),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+void _showComplaintDetail(BuildContext context, String docId, Map<String, dynamic> data) {
+  final title = (data['title'] ?? 'Untitled').toString();
+  final category = (data['category'] ?? '-').toString();
+  final priority = (data['priority'] ?? 'low').toString();
+  final status = (data['status'] ?? 'pending').toString();
+  final description = (data['description'] ?? 'No description provided.').toString();
+  final hostelName = data['hostelName']?.toString() ?? '-';
+  final floorLabel = data['floorLabel']?.toString() ?? '-';
+  final roomNumber = data['roomNumber']?.toString() ?? '-';
+  final residentId = data['residentId']?.toString();
+  final createdAt = data['createdAt'] as Timestamp?;
+
+  const teal = Color(0xFF14B8A6);
+
+  Color priorityColor(String p) {
+    switch (p.toLowerCase()) {
+      case 'high': return const Color(0xFFEF4444);
+      case 'medium': return const Color(0xFFF59E0B);
+      default: return const Color(0xFF64748B);
+    }
+  }
+
+  Color statusColor(String s) {
+    switch (s.toLowerCase()) {
+      case 'resolved': case 'closed': return const Color(0xFF10B981);
+      case 'in progress': return const Color(0xFF3B82F6);
+      default: return const Color(0xFFF59E0B);
+    }
+  }
+
+  showDialog(
+    context: context,
+    builder: (ctx) {
+      return Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // ── Header ──
+                Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [const Color(0xFF1E293B), const Color(0xFF334155)],
+                    ),
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(20),
+                      topRight: Radius.circular(20),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.report_problem_rounded, color: Color(0xFFF59E0B), size: 20),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              title,
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                                fontFamily: 'Inter',
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 4),
+                            if (createdAt != null)
+                              Text(
+                                DateFormat('MMM dd, yyyy • hh:mm a').format(createdAt.toDate()),
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: Color(0xFF94A3B8),
+                                  fontFamily: 'Inter',
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close_rounded, color: Colors.white54),
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // ── Body ──
+                Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Status + Priority badges
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: statusColor(status).withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: statusColor(status).withOpacity(0.3)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  width: 6, height: 6,
+                                  decoration: BoxDecoration(
+                                    color: statusColor(status),
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  status.isEmpty ? 'Pending' : '${status[0].toUpperCase()}${status.substring(1)}',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: statusColor(status),
+                                    fontFamily: 'Inter',
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: priorityColor(priority).withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: priorityColor(priority).withOpacity(0.3)),
+                            ),
+                            child: Text(
+                              '${priority[0].toUpperCase()}${priority.substring(1)} Priority',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: priorityColor(priority),
+                                fontFamily: 'Inter',
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+
+                      // Category
+                      Row(
+                        children: [
+                          const Icon(Icons.label_outline_rounded, size: 16, color: Color(0xFF64748B)),
+                          const SizedBox(width: 8),
+                          const Text('Category: ', style: TextStyle(fontSize: 13, color: Color(0xFF64748B), fontFamily: 'Inter')),
+                          Text(
+                            category,
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF1E293B), fontFamily: 'Inter'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+
+                      // Resident info
+                      if (residentId != null)
+                        FutureBuilder<DocumentSnapshot>(
+                          future: FirebaseFirestore.instance.collection('residents').doc(residentId).get(),
+                          builder: (ctx, snap) {
+                            final name = (snap.data?.data() as Map<String, dynamic>?)?['fullName']?.toString() ?? 'Unknown';
+                            return Row(
+                              children: [
+                                const Icon(Icons.person_rounded, size: 16, color: Color(0xFF64748B)),
+                                const SizedBox(width: 8),
+                                const Text('Resident: ', style: TextStyle(fontSize: 13, color: Color(0xFF64748B), fontFamily: 'Inter')),
+                                Text(
+                                  name,
+                                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF1E293B), fontFamily: 'Inter'),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                      const SizedBox(height: 16),
+
+                      // Location
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF8FAFC),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFF1F5F9)),
+                        ),
+                        child: Row(
+                          children: [
+                            _detailChip(Icons.apartment_rounded, hostelName, const Color(0xFF6366F1)),
+                            const SizedBox(width: 12),
+                            _detailChip(Icons.layers_rounded, floorLabel, teal),
+                            const SizedBox(width: 12),
+                            _detailChip(Icons.meeting_room_outlined, 'Room $roomNumber', const Color(0xFFF59E0B)),
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(height: 20),
+
+                      // Description
+                      const Text(
+                        'Description',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF1E293B),
+                          fontFamily: 'Inter',
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF8FAFC),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFF1F5F9)),
+                        ),
+                        child: Text(
+                          description,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: Color(0xFF475569),
+                            height: 1.5,
+                            fontFamily: 'Inter',
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(height: 24),
+
+                      // ── Action Buttons ──
+                      const Text(
+                        'Update Status',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF1E293B),
+                          fontFamily: 'Inter',
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _statusActionBtn(ctx, docId, 'pending', 'Pending', const Color(0xFFF59E0B), status),
+                          _statusActionBtn(ctx, docId, 'in progress', 'In Progress', const Color(0xFF3B82F6), status),
+                          _statusActionBtn(ctx, docId, 'resolved', 'Resolved', const Color(0xFF10B981), status),
+                          _statusActionBtn(ctx, docId, 'closed', 'Closed', const Color(0xFF64748B), status),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
+
+Widget _detailChip(IconData icon, String text, Color color) {
+  return Expanded(
+    child: Row(
+      children: [
+        Icon(icon, size: 14, color: color),
+        const SizedBox(width: 4),
+        Flexible(
+          child: Text(
+            text,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: color,
+              fontFamily: 'Inter',
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+Widget _statusActionBtn(BuildContext ctx, String docId, String newStatus, String label, Color color, String currentStatus) {
+  final isActive = currentStatus.toLowerCase() == newStatus.toLowerCase();
+  return Material(
+    color: Colors.transparent,
+    child: InkWell(
+      onTap: isActive ? null : () async {
+        try {
+          await FirebaseFirestore.instance.collection('complaints').doc(docId).update({
+            'status': newStatus,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+          if (ctx.mounted) {
+            Navigator.pop(ctx);
+            ScaffoldMessenger.of(ctx).showSnackBar(
+              SnackBar(
+                content: Text('Status updated to $label'),
+                backgroundColor: color,
+              ),
+            );
+          }
+        } catch (e) {
+          if (ctx.mounted) {
+            ScaffoldMessenger.of(ctx).showSnackBar(
+              SnackBar(content: Text('Failed: $e'), backgroundColor: const Color(0xFFEF4444)),
+            );
+          }
+        }
+      },
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: isActive ? color : color.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: color.withOpacity(isActive ? 1 : 0.3)),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: isActive ? Colors.white : color,
+            fontFamily: 'Inter',
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 // ─────────────────────────────────────────────

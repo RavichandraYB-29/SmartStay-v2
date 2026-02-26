@@ -5,6 +5,8 @@ import 'package:intl/intl.dart';
 
 import 'login_screen.dart';
 import 'resident_notices_screen.dart';
+import 'rent_payments_screen.dart';
+import 'raise_complaint_screen.dart';
 import '../main.dart';
 import '../theme/app_text_styles.dart';
 
@@ -61,6 +63,7 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
       'floorLabel': floorLabel.isEmpty ? null : floorLabel,
       'sharingType': roomData?['sharingType']?.toString(),
       'roomNumber': roomData?['roomNumber']?.toString(),
+      'rentPerBed': roomData?['rentPerBed'],
       'bedId': bedId,
     };
   }
@@ -211,7 +214,13 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
                                 allocationMeta: allocationMeta,
                               ),
                               const SizedBox(height: 32),
-                              _PaymentSection(residentId: _residentId!),
+                              _PaymentSection(
+                                residentId: _residentId!,
+                                hostelId: hostelId?.toString(),
+                                pgId: pgId?.toString(),
+                                floorId: floorId?.toString(),
+                                roomId: roomId?.toString(),
+                              ),
                               const SizedBox(height: 32),
                               _QuickActions(
                                 residentId: _residentId!,
@@ -813,19 +822,10 @@ class _RoomDetailsCard extends StatelessWidget {
                       .snapshots(),
                   builder: (context, roommatesSnap) {
                     final roommates = roommatesSnap.data?.docs ?? [];
-                    final selfAuthUid =
-                        residentData['authUid'] ?? residentData['uid'];
+                    // Exclude self by document ID (most reliable)
                     final otherRoommates =
                         roommates
-                            .where(
-                              (r) =>
-                                  (r.data() as Map<String, dynamic>)[
-                                    'authUid'
-                                  ] !=
-                                  selfAuthUid &&
-                                  (r.data() as Map<String, dynamic>)['uid'] !=
-                                  selfAuthUid,
-                            )
+                            .where((r) => r.id != residentId)
                             .toList();
 
                     if (otherRoommates.isEmpty) {
@@ -838,13 +838,13 @@ class _RoomDetailsCard extends StatelessWidget {
                       );
                     }
 
-                    return Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
+                    return Column(
                       children: otherRoommates.map((doc) {
                         final data = doc.data() as Map<String, dynamic>;
                         final name =
-                            data['name'] ?? data['fullName'] ?? 'Unknown';
+                            (data['fullName'] ?? data['name'] ?? 'Unknown').toString();
+                        final bedId =
+                            (data['bedId'] ?? data['allocationDetails']?['bedId'] ?? '').toString();
                         final initials =
                             name
                                 .split(' ')
@@ -854,41 +854,66 @@ class _RoomDetailsCard extends StatelessWidget {
                                 .toUpperCase();
 
                         return Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
                             color: const Color(0xFFF8FAFC),
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(color: const Color(0xFFF1F5F9)),
                           ),
                           child: Row(
-                            mainAxisSize: MainAxisSize.min,
                             children: [
                               CircleAvatar(
-                                radius: 12,
+                                radius: 16,
                                 backgroundColor: const Color(
                                   0xFF14B8A6,
                                 ).withOpacity(0.1),
                                 child: Text(
                                   initials,
                                   style: const TextStyle(
-                                    fontSize: 10,
+                                    fontSize: 11,
                                     fontWeight: FontWeight.w700,
                                     color: Color(0xFF14B8A6),
                                   ),
                                 ),
                               ),
-                              const SizedBox(width: 10),
-                              Text(
-                                name,
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: Color(0xFF334155),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  name,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF334155),
+                                  ),
                                 ),
                               ),
+                              if (bedId.isNotEmpty)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 3,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF14B8A6).withOpacity(0.08),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(Icons.bed_rounded, size: 12, color: Color(0xFF14B8A6)),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'Bed $bedId',
+                                        style: const TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w700,
+                                          color: Color(0xFF14B8A6),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                             ],
                           ),
                         );
@@ -1071,21 +1096,85 @@ class _QuickStatsCard extends StatelessWidget {
                           ),
                         ),
                         const Divider(height: 32, color: Color(0xFFF1F5F9)),
-                        _QuickStatItem(
-                          icon: Icons.payments_outlined,
-                          color: const Color(0xFF10B981),
-                          label: 'Payment Status',
-                          value: isPaid ? 'Up to Date' : 'Due Soon',
-                          trailing: Icon(
-                            isPaid
-                                ? Icons.check_circle_rounded
-                                : Icons.info_rounded,
-                            color:
-                                isPaid
-                                    ? const Color(0xFF10B981)
-                                    : const Color(0xFFF59E0B),
-                            size: 20,
-                          ),
+                        FutureBuilder<Timestamp?>(
+                          future: () async {
+                            try {
+                              final snap = await FirebaseFirestore.instance
+                                  .collection('residents')
+                                  .doc(residentId)
+                                  .get();
+                              final d = snap.data();
+                              final alloc = d?['allocationDetails'] as Map<String, dynamic>?;
+                              return alloc?['allocatedAt'] as Timestamp?;
+                            } catch (_) {
+                              return null;
+                            }
+                          }(),
+                          builder: (context, allocSnap) {
+                            final allocatedAt = allocSnap.data;
+
+                            // Calculate next due date from allocation
+                            DateTime? nextDue;
+                            if (allocatedAt != null) {
+                              final aDate = allocatedAt.toDate();
+                              final now = DateTime.now();
+                              final joinDay = aDate.day;
+                              DateTime dd = DateTime(aDate.year, aDate.month + 1, 1);
+                              final ldm = DateTime(dd.year, dd.month + 1, 0).day;
+                              final d = joinDay > ldm ? ldm : joinDay;
+                              dd = DateTime(dd.year, dd.month, d);
+                              while (dd.isBefore(now)) {
+                                final nm = DateTime(dd.year, dd.month + 1, 1);
+                                final ld = DateTime(nm.year, nm.month + 1, 0).day;
+                                final nd = joinDay > ld ? ld : joinDay;
+                                dd = DateTime(nm.year, nm.month, nd);
+                              }
+                              nextDue = dd;
+                            }
+
+                            // Determine status
+                            String statusText;
+                            Color statusColor;
+                            IconData statusIcon;
+
+                            if (isPaid) {
+                              statusText = 'Paid';
+                              statusColor = const Color(0xFF10B981);
+                              statusIcon = Icons.check_circle_rounded;
+                            } else if (nextDue != null) {
+                              final now = DateTime.now();
+                              final daysUntilDue = nextDue.difference(now).inDays;
+                              if (daysUntilDue < 0) {
+                                statusText = 'Overdue';
+                                statusColor = const Color(0xFFEF4444);
+                                statusIcon = Icons.warning_rounded;
+                              } else if (daysUntilDue <= 7) {
+                                statusText = 'Due Soon';
+                                statusColor = const Color(0xFFF59E0B);
+                                statusIcon = Icons.info_rounded;
+                              } else {
+                                statusText = 'Upcoming';
+                                statusColor = const Color(0xFF3B82F6);
+                                statusIcon = Icons.schedule_rounded;
+                              }
+                            } else {
+                              statusText = 'Not Paid';
+                              statusColor = const Color(0xFFF59E0B);
+                              statusIcon = Icons.info_rounded;
+                            }
+
+                            return _QuickStatItem(
+                              icon: Icons.payments_outlined,
+                              color: const Color(0xFF10B981),
+                              label: 'Payment Status',
+                              value: statusText,
+                              trailing: Icon(
+                                statusIcon,
+                                color: statusColor,
+                                size: 20,
+                              ),
+                            );
+                          },
                         ),
                       ],
                     );
@@ -1165,11 +1254,83 @@ class _QuickStatItem extends StatelessWidget {
 
 class _PaymentSection extends StatelessWidget {
   final String residentId;
+  final String? hostelId;
+  final String? pgId;
+  final String? floorId;
+  final String? roomId;
 
-  const _PaymentSection({required this.residentId});
+  const _PaymentSection({
+    required this.residentId,
+    this.hostelId,
+    this.pgId,
+    this.floorId,
+    this.roomId,
+  });
+
+   Future<int?> _fetchRentPerBed() async {
+    if (hostelId == null || pgId == null || floorId == null || roomId == null) {
+      return null;
+    }
+    try {
+      final roomSnap = await FirebaseFirestore.instance
+          .collection('hostels')
+          .doc(hostelId)
+          .collection('pgs')
+          .doc(pgId)
+          .collection('floors')
+          .doc(floorId)
+          .collection('rooms')
+          .doc(roomId)
+          .get();
+      final data = roomSnap.data();
+      if (data != null && data['rentPerBed'] != null) {
+        return (data['rentPerBed'] as num).toInt();
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<Timestamp?> _fetchAllocatedAt() async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('residents')
+          .doc(residentId)
+          .get();
+      final data = snap.data();
+      final allocation = data?['allocationDetails'] as Map<String, dynamic>?;
+      return allocation?['allocatedAt'] as Timestamp?;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Calculates the next monthly due date from allocation date.
+  /// e.g. joined Jan 1 → due Feb 1, Mar 1, Apr 1, etc.
+  static DateTime? _calculateNextDueDate(Timestamp? allocatedAtTs) {
+    if (allocatedAtTs == null) return null;
+    final allocatedAt = allocatedAtTs.toDate();
+    final now = DateTime.now();
+    final joinDay = allocatedAt.day;
+
+    DateTime dueDate = DateTime(allocatedAt.year, allocatedAt.month + 1, 1);
+    final lastDayOfMonth = DateTime(dueDate.year, dueDate.month + 1, 0).day;
+    final day = joinDay > lastDayOfMonth ? lastDayOfMonth : joinDay;
+    dueDate = DateTime(dueDate.year, dueDate.month, day);
+
+    while (dueDate.isBefore(now)) {
+      final nextMonth = DateTime(dueDate.year, dueDate.month + 1, 1);
+      final lastDay = DateTime(nextMonth.year, nextMonth.month + 1, 0).day;
+      final d = joinDay > lastDay ? lastDay : joinDay;
+      dueDate = DateTime(nextMonth.year, nextMonth.month, d);
+    }
+
+    return dueDate;
+  }
 
   @override
   Widget build(BuildContext context) {
+    const teal = Color(0xFF14B8A6);
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -1185,295 +1346,323 @@ class _PaymentSection extends StatelessWidget {
       ),
       child: Padding(
         padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF6366F1).withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Icon(
-                        Icons.payments_rounded,
-                        color: Color(0xFF6366F1),
-                        size: 24,
-                      ),
-                    ),
-                    const SizedBox(width: 14),
-                    const Text(
-                      'Fee & Payments',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: -0.5,
-                      ),
-                    ),
-                  ],
-                ),
-                StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance
-                      .collection('payments')
-                      .where('residentId', isEqualTo: residentId)
-                      .orderBy('dueDate', descending: true)
-                      .limit(1)
-                      .snapshots(),
-                  builder: (context, snap) {
-                    final latest = snap.data?.docs.firstOrNull;
-                    final status = latest?.data() as Map<String, dynamic>?;
-                    final isPaid =
-                        status?['status']?.toString().toLowerCase() == 'paid' ||
-                        status?['isPaid'] == true;
-                    final dueDate = status?['dueDate'] as Timestamp?;
-                    final dueDateTime = dueDate?.toDate();
-                    final isOverdue =
-                        !isPaid &&
-                        dueDateTime != null &&
-                        DateTime.now().isAfter(dueDateTime);
+        child: FutureBuilder<List<dynamic>>(
+          future: Future.wait([_fetchRentPerBed(), _fetchAllocatedAt()]),
+          builder: (context, snapList) {
+            final rentPerBed = snapList.data?[0] as int?;
+            final allocatedAt = snapList.data?[1] as Timestamp?;
+            final calculatedDueDate = _calculateNextDueDate(allocatedAt);
 
-                    return Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color:
-                            (isPaid
-                                    ? const Color(0xFF10B981)
-                                    : (isOverdue
-                                        ? const Color(0xFFEF4444)
-                                        : const Color(0xFFF59E0B)))
-                                .withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        isPaid ? 'Paid' : (isOverdue ? 'Overdue' : 'Pending'),
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color:
-                              isPaid
-                                  ? const Color(0xFF10B981)
-                                  : (isOverdue
-                                      ? const Color(0xFFEF4444)
-                                      : const Color(0xFFF59E0B)),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
-            StreamBuilder<QuerySnapshot>(
+            return StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance
                   .collection('payments')
                   .where('residentId', isEqualTo: residentId)
                   .orderBy('dueDate', descending: true)
-                  .limit(1)
                   .snapshots(),
-              builder: (context, snap) {
-                if (!snap.hasData || snap.data!.docs.isEmpty) {
-                  return Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF8FAFC),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: const Color(0xFFF1F5F9)),
-                    ),
-                    child: const Center(
-                      child: Text(
-                        'No payment records found',
-                        style: TextStyle(
-                          color: Color(0xFF64748B),
-                          fontSize: 14,
-                        ),
-                      ),
-                    ),
-                  );
-                }
+              builder: (context, paymentSnap) {
+                final allPayments = paymentSnap.data?.docs ?? [];
+                final latestPayment = allPayments.isNotEmpty
+                    ? allPayments.first.data() as Map<String, dynamic>
+                    : null;
 
-                final payment = snap.data!.docs.first;
-                final data = payment.data() as Map<String, dynamic>;
-                final amount = data['amount'] ?? data['monthlyFee'] ?? 0;
-                final dueDate = data['dueDate'] as Timestamp?;
-                final paidAt = data['paidAt'] as Timestamp?;
-                final month = data['month'] ?? '';
+                final isPaid = latestPayment != null &&
+                    (latestPayment['status']?.toString().toLowerCase() == 'paid' ||
+                        latestPayment['isPaid'] == true);
+                final dueDate = latestPayment?['dueDate'] as Timestamp?;
+                final dueDateTime = dueDate?.toDate();
+                final isOverdue = !isPaid &&
+                    dueDateTime != null &&
+                    DateTime.now().isAfter(dueDateTime);
 
-                return Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF8FAFC),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: const Color(0xFFF1F5F9)),
-                  ),
-                  child: Column(
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _PaymentInfoItem(
-                              label: 'CURR. MONTH',
-                              value:
-                                  month.isNotEmpty
-                                      ? month
-                                      : (dueDate != null
-                                          ? DateFormat(
-                                            'MMMM yyyy',
-                                          ).format(dueDate.toDate())
-                                          : '-'),
-                            ),
-                          ),
-                          Expanded(
-                            child: _PaymentInfoItem(
-                              label: 'AMOUNT',
-                              value: '₹$amount',
-                            ),
-                          ),
-                        ],
-                      ),
-                      const Divider(height: 32, color: Color(0xFFE2E8F0)),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _PaymentInfoItem(
-                              label: 'PAID ON',
-                              value:
-                                  paidAt != null
-                                      ? DateFormat(
-                                        'MMM dd, yyyy',
-                                      ).format(paidAt.toDate())
-                                      : '-',
-                            ),
-                          ),
-                          Expanded(
-                            child: _PaymentInfoItem(
-                              label: 'DUE DATE',
-                              value:
-                                  dueDate != null
-                                      ? DateFormat(
-                                        'MMM dd, yyyy',
-                                      ).format(dueDate.toDate())
-                                      : '-',
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-            const SizedBox(height: 24),
-            const Text(
-              'PAYMENT HISTORY',
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-                color: Color(0xFF64748B),
-                letterSpacing: 1.2,
-              ),
-            ),
-            const SizedBox(height: 12),
-            StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('payments')
-                  .where('residentId', isEqualTo: residentId)
-                  .orderBy('paidAt', descending: true)
-                  .limit(5)
-                  .snapshots(),
-              builder: (context, snap) {
-                if (!snap.hasData || snap.data!.docs.isEmpty) {
-                  return const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 20),
-                    child: Center(
-                      child: Text(
-                        'No history',
-                        style:
-                            TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
-                      ),
-                    ),
-                  );
-                }
+                // Determine amount: prefer rentPerBed from room, fallback to payment amount
+                final paymentAmount = latestPayment?['amount'] ?? latestPayment?['monthlyFee'] ?? 0;
+                final displayAmount = rentPerBed ?? paymentAmount;
+
+                final paidAt = latestPayment?['paidAt'] as Timestamp?;
+                final currentMonth = DateFormat('MMMM yyyy').format(DateTime.now());
 
                 return Column(
-                  children: snap.data!.docs.map((doc) {
-                    final data = doc.data() as Map<String, dynamic>;
-                    final amount = data['amount'] ?? data['monthlyFee'] ?? 0;
-                    final paidAt = data['paidAt'] as Timestamp?;
-                    final month = data['month'] ?? '';
-
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 10),
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF8FAFC),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFFF1F5F9)),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // ── Header Row ──
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.attach_money_rounded,
+                          color: Color(0xFF334155),
+                          size: 24,
+                        ),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Fee Status & Payment History',
+                            style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF1E293B),
+                              letterSpacing: -0.3,
+                            ),
+                          ),
+                        ),
+                        // Status badge
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: isPaid
+                                ? teal
+                                : (isOverdue
+                                    ? const Color(0xFFEF4444)
+                                    : const Color(0xFFF59E0B)),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            isPaid ? 'Paid' : (isOverdue ? 'Overdue' : 'Pending'),
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        // View Rent Payment link
+                        GestureDetector(
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => RentPaymentsScreen(
+                                  residentId: residentId,
+                                  hostelId: hostelId,
+                                  pgId: pgId,
+                                  floorId: floorId,
+                                  roomId: roomId,
+                                ),
+                              ),
+                            );
+                          },
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
                               Text(
-                                month.isNotEmpty
-                                    ? month
-                                    : (paidAt != null
-                                        ? DateFormat(
-                                          'MMMM yyyy',
-                                        ).format(paidAt.toDate())
-                                        : 'Unknown'),
+                                'View Rent Payment',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: teal,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Icon(
+                                Icons.arrow_forward_rounded,
+                                size: 16,
+                                color: teal,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+
+                    // ── Current Month Info Card ──
+                    Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 20,
+                        ),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              teal.withOpacity(0.06),
+                              teal.withOpacity(0.02),
+                            ],
+                          ),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: teal.withOpacity(0.15),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: _PaymentInfoItem(
+                                label: 'Current Month',
+                                value: currentMonth,
+                              ),
+                            ),
+                            Expanded(
+                              child: _PaymentInfoItem(
+                                label: 'Amount',
+                                value: '₹$displayAmount',
+                              ),
+                            ),
+                            Expanded(
+                              child: _PaymentInfoItem(
+                                label: 'Paid On',
+                                value: isPaid && paidAt != null
+                                    ? DateFormat('MMM dd, yyyy').format(paidAt.toDate())
+                                    : 'Not Paid',
+                              ),
+                            ),
+                            Expanded(
+                              child: _PaymentInfoItem(
+                                label: 'Due Date',
+                                value: calculatedDueDate != null
+                                    ? DateFormat('MMM dd, yyyy').format(calculatedDueDate)
+                                    : (dueDate != null
+                                        ? DateFormat('MMM dd, yyyy').format(dueDate.toDate())
+                                        : '-'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                    const SizedBox(height: 28),
+
+                    // ── Payment History Header ──
+                    Row(
+                      children: [
+                        Container(
+                          width: 4,
+                          height: 20,
+                          decoration: BoxDecoration(
+                            color: teal,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        const Text(
+                          'Payment History',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF1E293B),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+
+                    // ── Payment History List ──
+                    if (allPayments.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 20),
+                        child: Center(
+                          child: Text(
+                            'No history',
+                            style: TextStyle(
+                              color: Color(0xFF94A3B8),
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      )
+                    else
+                      ...allPayments.take(5).map((doc) {
+                        final data = doc.data() as Map<String, dynamic>;
+                        final amt = data['amount'] ?? data['monthlyFee'] ?? 0;
+                        final paid = data['paidAt'] as Timestamp?;
+                        final monthLabel = data['month']?.toString() ?? '';
+                        final docIsPaid =
+                            data['status']?.toString().toLowerCase() == 'paid' ||
+                            data['isPaid'] == true;
+
+                        final monthDisplay = monthLabel.isNotEmpty
+                            ? monthLabel
+                            : (paid != null
+                                ? DateFormat('MMMM yyyy').format(paid.toDate())
+                                : 'Unknown');
+                        final dateDisplay = paid != null
+                            ? DateFormat('MMM d, yyyy').format(paid.toDate())
+                            : '';
+
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 2),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 20,
+                            vertical: 18,
+                          ),
+                          decoration: const BoxDecoration(
+                            border: Border(
+                              bottom: BorderSide(
+                                color: Color(0xFFF1F5F9),
+                                width: 1,
+                              ),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      monthDisplay,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 15,
+                                        color: Color(0xFF1E293B),
+                                      ),
+                                    ),
+                                    if (dateDisplay.isNotEmpty)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 3),
+                                        child: Text(
+                                          dateDisplay,
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            color: Color(0xFF94A3B8),
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              Text(
+                                '₹$amt',
                                 style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 14,
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 15,
                                   color: Color(0xFF334155),
                                 ),
                               ),
-                              if (paidAt != null)
-                                Text(
-                                  DateFormat(
-                                    'MMM dd, yyyy',
-                                  ).format(paidAt.toDate()),
+                              const SizedBox(width: 12),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 5,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: docIsPaid
+                                      ? teal
+                                      : const Color(0xFFF59E0B),
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Text(
+                                  docIsPaid ? 'Paid' : 'Pending',
                                   style: const TextStyle(
                                     fontSize: 11,
-                                    color: Color(0xFF94A3B8),
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
                                   ),
                                 ),
-                            ],
-                          ),
-                          Row(
-                            children: [
-                              Text(
-                                '₹$amount',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 14,
-                                  color: Color(0xFF10B981),
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              const Icon(
-                                Icons.check_circle_rounded,
-                                color: Color(0xFF10B981),
-                                size: 16,
                               ),
                             ],
                           ),
-                        ],
-                      ),
-                    );
-                  }).toList(),
+                        );
+                      }),
+                  ],
                 );
               },
-            ),
-          ],
+            );
+          },
         ),
       ),
     );
@@ -1494,10 +1683,10 @@ class _PaymentInfoItem extends StatelessWidget {
         Text(
           label,
           style: const TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.w700,
-            color: Color(0xFF94A3B8),
-            letterSpacing: 0.5,
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF14B8A6),
+            letterSpacing: 0.3,
           ),
         ),
         const SizedBox(height: 6),
@@ -1553,7 +1742,14 @@ class _QuickActions extends StatelessWidget {
                       colors: [Color(0xFFF97316), Color(0xFFFB923C)],
                     ),
                     onTap: () {
-                      // TODO: Navigate to raise complaint
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => RaiseComplaintScreen(
+                            residentId: residentId,
+                          ),
+                        ),
+                      );
                     },
                   ),
                   const SizedBox(height: 12),
@@ -1589,7 +1785,14 @@ class _QuickActions extends StatelessWidget {
                       colors: [Color(0xFFF97316), Color(0xFFFB923C)],
                     ),
                     onTap: () {
-                      // TODO: Navigate to raise complaint
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => RaiseComplaintScreen(
+                            residentId: residentId,
+                          ),
+                        ),
+                      );
                     },
                   ),
                 ),
@@ -1869,6 +2072,50 @@ class _ComplaintsCard extends StatelessWidget {
 
   const _ComplaintsCard({required this.residentId});
 
+  Color _statusColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'in progress': return const Color(0xFF3B82F6);
+      case 'resolved': return const Color(0xFF10B981);
+      case 'closed': return const Color(0xFF64748B);
+      default: return const Color(0xFFF59E0B);
+    }
+  }
+
+  String _statusLabel(String status) {
+    switch (status.toLowerCase()) {
+      case 'in progress': return 'In Progress';
+      case 'resolved': return 'Resolved';
+      case 'closed': return 'Closed';
+      default: return 'Pending';
+    }
+  }
+
+  IconData _statusIcon(String status) {
+    switch (status.toLowerCase()) {
+      case 'in progress': return Icons.autorenew_rounded;
+      case 'resolved': return Icons.check_circle_rounded;
+      case 'closed': return Icons.cancel_rounded;
+      default: return Icons.schedule_rounded;
+    }
+  }
+
+  Color _priorityColor(String p) {
+    switch (p.toLowerCase()) {
+      case 'high': return const Color(0xFFEF4444);
+      case 'medium': return const Color(0xFFF59E0B);
+      default: return const Color(0xFF64748B);
+    }
+  }
+
+  String _timeAgo(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return DateFormat('MMM dd').format(dt);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -1876,11 +2123,7 @@ class _ComplaintsCard extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(24),
         boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
-          ),
+          BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 20, offset: const Offset(0, 10)),
         ],
         border: Border.all(color: const Color(0xFFF1F5F9)),
       ),
@@ -1888,88 +2131,64 @@ class _ComplaintsCard extends StatelessWidget {
         stream: FirebaseFirestore.instance
             .collection('complaints')
             .where('residentId', isEqualTo: residentId)
-            .orderBy('createdAt', descending: true)
-            .limit(3)
             .snapshots(),
         builder: (context, snap) {
-          final docs = snap.data?.docs ?? [];
-          final totalCount = docs.length;
+          if (snap.hasError) {
+            return Padding(
+              padding: const EdgeInsets.all(24),
+              child: Center(child: Text('Error loading complaints', style: TextStyle(color: Color(0xFFEF4444), fontSize: 12))),
+            );
+          }
+
+          final allDocs = snap.data?.docs ?? [];
+          // Sort by createdAt desc client-side
+          allDocs.sort((a, b) {
+            final aTs = (a.data() as Map<String, dynamic>)['createdAt'] as Timestamp?;
+            final bTs = (b.data() as Map<String, dynamic>)['createdAt'] as Timestamp?;
+            if (aTs == null && bTs == null) return 0;
+            if (aTs == null) return 1;
+            if (bTs == null) return -1;
+            return bTs.compareTo(aTs);
+          });
+
+          // Filter: only show active complaints (not resolved/closed)
+          final activeDocs = allDocs.where((doc) {
+            final s = ((doc.data() as Map<String, dynamic>)['status'] ?? 'pending').toString().toLowerCase();
+            return s != 'resolved' && s != 'closed';
+          }).take(5).toList();
+
+          final activeCount = activeDocs.length;
 
           return Padding(
             padding: const EdgeInsets.all(24),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Header
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF59E0B).withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Icon(
-                            Icons.error_outline_rounded,
-                            color: Color(0xFFF59E0B),
-                            size: 24,
-                          ),
-                        ),
-                        const SizedBox(width: 14),
-                        const Text(
-                          'Complaints',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: -0.5,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF59E0B).withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            totalCount.toString(),
-                            style: const TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w800,
-                              color: Color(0xFFF59E0B),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    TextButton(
-                      onPressed: () {
-                        // TODO: View all complaints
-                      },
-                      style: TextButton.styleFrom(
-                        foregroundColor: const Color(0xFF64748B),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 6,
-                        ),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF59E0B).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                      child: const Text(
-                        'View All',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
+                      child: const Icon(Icons.error_outline_rounded, color: Color(0xFFF59E0B), size: 24),
                     ),
+                    const SizedBox(width: 14),
+                    const Text('My Complaints', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, letterSpacing: -0.5)),
+                    if (activeCount > 0) ...[
+                      const SizedBox(width: 10),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(color: const Color(0xFFEF4444), borderRadius: BorderRadius.circular(10)),
+                        child: Text('$activeCount active', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Colors.white)),
+                      ),
+                    ],
                   ],
                 ),
-                const SizedBox(height: 24),
-                if (docs.isEmpty)
+                const SizedBox(height: 20),
+                if (activeDocs.isEmpty)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 32),
                     child: Center(
@@ -1977,53 +2196,26 @@ class _ComplaintsCard extends StatelessWidget {
                         children: [
                           Container(
                             padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF10B981).withOpacity(0.05),
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.verified_rounded,
-                              color: Color(0xFF10B981),
-                              size: 32,
-                            ),
+                            decoration: BoxDecoration(color: const Color(0xFF10B981).withOpacity(0.05), shape: BoxShape.circle),
+                            child: const Icon(Icons.verified_rounded, color: Color(0xFF10B981), size: 32),
                           ),
                           const SizedBox(height: 16),
-                          const Text(
-                            'All Clean!',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 15,
-                              color: Color(0xFF334155),
-                            ),
-                          ),
+                          const Text('All Clear!', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: Color(0xFF334155))),
                           const SizedBox(height: 4),
-                          const Text(
-                            'No pending complaints found',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Color(0xFF94A3B8),
-                            ),
-                          ),
+                          const Text('No active complaints', style: TextStyle(fontSize: 13, color: Color(0xFF94A3B8))),
                         ],
                       ),
                     ),
                   )
                 else
                   Column(
-                    children: docs.map((doc) {
+                    children: activeDocs.map((doc) {
                       final data = doc.data() as Map<String, dynamic>;
-                      final title = data['title'] ?? 'Untitled';
-                      final category = data['category'] ?? 'General';
-                      final status =
-                          data['status']?.toString().toLowerCase() ?? '';
+                      final title = (data['title'] ?? 'Untitled').toString();
+                      final category = (data['category'] ?? 'General').toString();
+                      final status = (data['status'] ?? 'pending').toString();
+                      final priority = (data['priority'] ?? 'low').toString();
                       final createdAt = data['createdAt'] as Timestamp?;
-
-                      final isResolved =
-                          status == 'resolved' || status == 'closed';
-                      final badgeColor =
-                          isResolved
-                              ? const Color(0xFF10B981)
-                              : const Color(0xFFF59E0B);
 
                       return Container(
                         margin: const EdgeInsets.only(bottom: 12),
@@ -2036,64 +2228,60 @@ class _ComplaintsCard extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            // Title + Status badge
                             Row(
                               children: [
-                                Expanded(
-                                  child: Text(
-                                    title,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 14,
-                                      color: Color(0xFF334155),
-                                    ),
-                                  ),
-                                ),
                                 Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 4,
-                                  ),
+                                  width: 3, height: 36,
+                                  margin: const EdgeInsets.only(right: 12),
+                                  decoration: BoxDecoration(color: _priorityColor(priority), borderRadius: BorderRadius.circular(2)),
+                                ),
+                                Expanded(
+                                  child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: Color(0xFF334155))),
+                                ),
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                                   decoration: BoxDecoration(
-                                    color: badgeColor.withOpacity(0.1),
+                                    color: _statusColor(status).withOpacity(0.1),
                                     borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: _statusColor(status).withOpacity(0.3)),
                                   ),
-                                  child: Text(
-                                    isResolved ? 'Resolved' : 'Review',
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      color: badgeColor,
-                                      fontWeight: FontWeight.w800,
-                                    ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(_statusIcon(status), size: 12, color: _statusColor(status)),
+                                      const SizedBox(width: 4),
+                                      Text(_statusLabel(status),
+                                        style: TextStyle(fontSize: 10, color: _statusColor(status), fontWeight: FontWeight.w700)),
+                                    ],
                                   ),
                                 ),
                               ],
                             ),
                             const SizedBox(height: 10),
+                            // Category + Priority + Time
                             Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                Text(
-                                  category.toString().toUpperCase(),
-                                  style: const TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w800,
-                                    color: Color(0xFF94A3B8),
-                                    letterSpacing: 0.5,
+                                const Icon(Icons.label_outline_rounded, size: 13, color: Color(0xFF94A3B8)),
+                                const SizedBox(width: 4),
+                                Text(category, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF94A3B8))),
+                                const SizedBox(width: 12),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: _priorityColor(priority).withOpacity(0.08),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(
+                                    '${priority[0].toUpperCase()}${priority.substring(1)} priority',
+                                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: _priorityColor(priority)),
                                   ),
                                 ),
-                                Text(
-                                  createdAt != null
-                                      ? DateFormat(
-                                        'MMM dd, yyyy',
-                                      ).format(createdAt.toDate())
-                                      : '-',
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    color: Color(0xFF94A3B8),
-                                  ),
-                                ),
+                                const Spacer(),
+                                if (createdAt != null) Text(_timeAgo(createdAt.toDate()),
+                                  style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8))),
                               ],
                             ),
                           ],
@@ -2109,6 +2297,7 @@ class _ComplaintsCard extends StatelessWidget {
     );
   }
 }
+
 
 class _NoticesPreviewCard extends StatelessWidget {
   final String residentId;

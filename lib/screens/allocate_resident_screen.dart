@@ -15,6 +15,9 @@ class AllocateResidentScreen extends StatefulWidget {
 }
 
 class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
+  // ── Mode toggle ──
+  bool _isReallocateMode = false;
+
   // ── Resident selection ──
   String _searchQuery = '';
   QueryDocumentSnapshot? _selectedResident;
@@ -151,6 +154,95 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
     }
   }
 
+  Future<void> _confirmReallocation() async {
+    if (!_canAllocate) return;
+    final r = _selectedResident!;
+    final rData = r.data() as Map<String, dynamic>;
+    final rName = (rData['fullName'] ?? rData['name'] ?? 'Resident').toString();
+    final alloc = rData['allocationDetails'] as Map<String, dynamic>?;
+    final oldHostelId = alloc?['hostelId']?.toString() ?? rData['hostelId']?.toString();
+    final oldPgId = alloc?['pgId']?.toString() ?? rData['pgId']?.toString();
+    final oldFloorId = alloc?['floorId']?.toString() ?? rData['floorId']?.toString();
+    final oldRoomId = alloc?['roomId']?.toString() ?? rData['roomId']?.toString();
+    final oldBedId = alloc?['bedId']?.toString() ?? rData['bedId']?.toString();
+
+    // Prevent reallocating to the same bed
+    if (oldHostelId == _hostelId && oldPgId == _pgId && oldFloorId == _floorId && oldRoomId == _roomId && oldBedId == _bedId) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Resident is already in this bed. Choose a different location.'), backgroundColor: Color(0xFFF59E0B)),
+      );
+      return;
+    }
+
+    final confirmed = await showAdminConfirmDialog(
+      context,
+      title: 'Confirm Reallocation?',
+      message: 'Move $rName to bed $_bedId? This will free their current bed.',
+      confirmLabel: 'Reallocate',
+    );
+    if (!confirmed || !mounted) return;
+
+    setState(() => _allocating = true);
+    try {
+      final batch = FirebaseFirestore.instance.batch();
+      final fs = FirebaseFirestore.instance;
+
+      // ── Deallocate old location ──
+      if (oldHostelId != null && oldPgId != null && oldFloorId != null && oldRoomId != null && oldBedId != null) {
+        final oldBedRef = fs.collection('hostels').doc(oldHostelId).collection('pgs').doc(oldPgId)
+            .collection('floors').doc(oldFloorId).collection('rooms').doc(oldRoomId).collection('beds').doc(oldBedId);
+        final oldRoomRef = fs.collection('hostels').doc(oldHostelId).collection('pgs').doc(oldPgId)
+            .collection('floors').doc(oldFloorId).collection('rooms').doc(oldRoomId);
+        final oldPgRef = fs.collection('hostels').doc(oldHostelId).collection('pgs').doc(oldPgId);
+        final oldFloorRef = fs.collection('hostels').doc(oldHostelId).collection('pgs').doc(oldPgId)
+            .collection('floors').doc(oldFloorId);
+
+        batch.update(oldBedRef, {'isOccupied': false, 'residentId': null, 'allocatedAt': null});
+        batch.update(oldRoomRef, {'availableBeds': FieldValue.increment(1), 'occupiedBeds': FieldValue.increment(-1)});
+        batch.update(oldPgRef, {'availableBeds': FieldValue.increment(1)});
+        batch.update(oldFloorRef, {'availableBeds': FieldValue.increment(1)});
+      }
+
+      // ── Allocate new location ──
+      final newBedRef = fs.collection('hostels').doc(_hostelId).collection('pgs').doc(_pgId)
+          .collection('floors').doc(_floorId).collection('rooms').doc(_roomId).collection('beds').doc(_bedId);
+      final newRoomRef = fs.collection('hostels').doc(_hostelId).collection('pgs').doc(_pgId)
+          .collection('floors').doc(_floorId).collection('rooms').doc(_roomId);
+      final newPgRef = fs.collection('hostels').doc(_hostelId).collection('pgs').doc(_pgId);
+      final newFloorRef = fs.collection('hostels').doc(_hostelId).collection('pgs').doc(_pgId)
+          .collection('floors').doc(_floorId);
+      final residentRef = fs.collection('residents').doc(r.id);
+
+      batch.update(newBedRef, {'isOccupied': true, 'residentId': r.id, 'allocatedAt': FieldValue.serverTimestamp()});
+      batch.update(newRoomRef, {'availableBeds': FieldValue.increment(-1), 'occupiedBeds': FieldValue.increment(1)});
+      batch.update(newPgRef, {'availableBeds': FieldValue.increment(-1)});
+      batch.update(newFloorRef, {'availableBeds': FieldValue.increment(-1)});
+      batch.update(residentRef, {
+        'hostelId': _hostelId,
+        'pgId': _pgId,
+        'floorId': _floorId,
+        'roomId': _roomId,
+        'bedId': _bedId,
+        'allocationDetails': {
+          'hostelId': _hostelId, 'pgId': _pgId, 'floorId': _floorId,
+          'roomId': _roomId, 'bedId': _bedId,
+          'allocatedAt': FieldValue.serverTimestamp(),
+          'allocatedByAdminId': widget.adminId,
+        },
+      });
+
+      await batch.commit();
+
+      if (!mounted) return;
+      setState(() { _selectedResident = null; _bedId = null; _beds = []; _roomId = null; });
+      await showAdminSuccessDialog(context, title: 'Reallocated!', message: '$rName has been moved to bed $_bedId.');
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Reallocation failed: $e')));
+    } finally {
+      if (mounted) setState(() => _allocating = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -158,19 +250,77 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
       backgroundColor: isDark ? const Color(0xFF0F1117) : AdminColors.scaffoldLight,
       body: SafeArea(child: Column(children: [
         AdminPageHeader(
-          title: 'Allocate Resident',
-          subtitle: 'Dashboard → Allocation',
-          icon: Icons.bed_rounded,
-          iconGradient: AdminGradients.teal,
+          title: _isReallocateMode ? 'Reallocate Resident' : 'Allocate Resident',
+          subtitle: _isReallocateMode ? 'Dashboard → Reallocation' : 'Dashboard → Allocation',
+          icon: _isReallocateMode ? Icons.swap_horiz_rounded : Icons.bed_rounded,
+          iconGradient: _isReallocateMode ? AdminGradients.headerPurple : AdminGradients.teal,
           onBack: () => Navigator.pop(context),
         ),
         Expanded(child: SingleChildScrollView(
           padding: const EdgeInsets.all(20),
           child: Column(children: [
+            // ── Mode Toggle ──────────────────────────────
+            Container(
+              margin: const EdgeInsets.only(bottom: 16),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF1E2130) : Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 12, offset: const Offset(0, 4))],
+                border: Border.all(color: const Color(0xFFF1F5F9)),
+              ),
+              child: Row(children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() { _isReallocateMode = false; _selectedResident = null; _searchQuery = ''; }),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      decoration: BoxDecoration(
+                        color: !_isReallocateMode ? AdminColors.primary : Colors.transparent,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                        Icon(Icons.person_add_rounded, size: 18,
+                          color: !_isReallocateMode ? Colors.white : AdminColors.textSecondary),
+                        const SizedBox(width: 8),
+                        Text('New Allocation',
+                          style: TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w700, fontFamily: 'Inter',
+                            color: !_isReallocateMode ? Colors.white : AdminColors.textSecondary)),
+                      ]),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() { _isReallocateMode = true; _selectedResident = null; _searchQuery = ''; }),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      decoration: BoxDecoration(
+                        color: _isReallocateMode ? const Color(0xFF8B5CF6) : Colors.transparent,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                        Icon(Icons.swap_horiz_rounded, size: 18,
+                          color: _isReallocateMode ? Colors.white : AdminColors.textSecondary),
+                        const SizedBox(width: 8),
+                        Text('Reallocate',
+                          style: TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w700, fontFamily: 'Inter',
+                            color: _isReallocateMode ? Colors.white : AdminColors.textSecondary)),
+                      ]),
+                    ),
+                  ),
+                ),
+              ]),
+            ),
             // ── Step 1: Select resident ──────────────────
             AdminSectionCard(
-              title: 'Step 1 – Select Resident', icon: Icons.person_search_rounded,
-              headerGradient: AdminGradients.headerLight, iconColor: AdminColors.primary,
+              title: _isReallocateMode ? 'Step 1 – Select Allocated Resident' : 'Step 1 – Select Resident',
+              icon: _isReallocateMode ? Icons.swap_horiz_rounded : Icons.person_search_rounded,
+              headerGradient: _isReallocateMode ? AdminGradients.headerPurple : AdminGradients.headerLight,
+              iconColor: _isReallocateMode ? const Color(0xFF8B5CF6) : AdminColors.primary,
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 AdminTextField(
                   label: 'Search', hint: 'Search by name or email...',
@@ -181,7 +331,7 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
                 StreamBuilder<QuerySnapshot>(
                   stream: FirebaseFirestore.instance.collection('residents')
                       .where('adminId', isEqualTo: widget.adminId)
-                      .where('isAllocated', isEqualTo: false)
+                      .where('isAllocated', isEqualTo: _isReallocateMode ? true : false)
                       .snapshots(),
                   builder: (ctx, snap) {
                     if (!snap.hasData) return const ShimmerBox(width: double.infinity, height: 100);
@@ -192,12 +342,28 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
                       final email = ((data['email'] ?? '') as String).toLowerCase();
                       return name.contains(_searchQuery) || email.contains(_searchQuery);
                     }).toList();
-                    if (docs.isEmpty) return const AdminEmptyState(icon: Icons.person_off_rounded, title: 'No unallocated residents', subtitle: 'All residents are allocated or search did not match.');
+                    if (docs.isEmpty) {
+                      return AdminEmptyState(
+                        icon: _isReallocateMode ? Icons.swap_horiz_rounded : Icons.person_off_rounded,
+                        title: _isReallocateMode ? 'No allocated residents' : 'No unallocated residents',
+                        subtitle: _isReallocateMode
+                          ? 'No residents are currently allocated or search did not match.'
+                          : 'All residents are allocated or search did not match.',
+                      );
+                    }
                     return Column(children: docs.map((d) {
                       final data = d.data() as Map<String, dynamic>;
                       final name = (data['fullName'] ?? data['name'] ?? 'Resident').toString();
                       final email = (data['email'] ?? '').toString();
                       final isSelected = _selectedResident?.id == d.id;
+
+                      // Get current allocation info for reallocate mode
+                      String? currentBed;
+                      if (_isReallocateMode) {
+                        final alloc = data['allocationDetails'] as Map<String, dynamic>?;
+                        currentBed = alloc?['bedId']?.toString() ?? data['bedId']?.toString();
+                      }
+
                       return GestureDetector(
                         onTap: () => setState(() => _selectedResident = isSelected ? null : d),
                         child: AnimatedContainer(
@@ -205,22 +371,43 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
                           margin: const EdgeInsets.only(bottom: 8),
                           padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
-                            color: isSelected ? AdminColors.primary.withOpacity(0.08) : (isDark ? const Color(0xFF252836) : const Color(0xFFF8F9FC)),
+                            color: isSelected
+                              ? (_isReallocateMode ? const Color(0xFF8B5CF6).withOpacity(0.08) : AdminColors.primary.withOpacity(0.08))
+                              : (isDark ? const Color(0xFF252836) : const Color(0xFFF8F9FC)),
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: isSelected ? AdminColors.primary : const Color(0xFFE5E7EB), width: isSelected ? 2 : 1),
+                            border: Border.all(
+                              color: isSelected
+                                ? (_isReallocateMode ? const Color(0xFF8B5CF6) : AdminColors.primary)
+                                : const Color(0xFFE5E7EB),
+                              width: isSelected ? 2 : 1),
                           ),
                           child: Row(children: [
                             CircleAvatar(
                               radius: 18,
-                              backgroundColor: isSelected ? AdminColors.primary : AdminColors.primary.withOpacity(0.15),
-                              child: Text(name.isNotEmpty ? name[0].toUpperCase() : '?', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: isSelected ? Colors.white : AdminColors.primary, fontFamily: 'Inter')),
+                              backgroundColor: isSelected
+                                ? (_isReallocateMode ? const Color(0xFF8B5CF6) : AdminColors.primary)
+                                : (_isReallocateMode ? const Color(0xFF8B5CF6).withOpacity(0.15) : AdminColors.primary.withOpacity(0.15)),
+                              child: Text(name.isNotEmpty ? name[0].toUpperCase() : '?',
+                                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700,
+                                  color: isSelected ? Colors.white : (_isReallocateMode ? const Color(0xFF8B5CF6) : AdminColors.primary),
+                                  fontFamily: 'Inter')),
                             ),
                             const SizedBox(width: 12),
                             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                               Text(name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14, fontFamily: 'Inter')),
                               Text(email, style: const TextStyle(fontSize: 12, color: AdminColors.textSecondary, fontFamily: 'Inter')),
+                              if (_isReallocateMode && currentBed != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: Row(children: [
+                                    const Icon(Icons.bed_rounded, size: 13, color: Color(0xFF8B5CF6)),
+                                    const SizedBox(width: 4),
+                                    Text('Current: Bed $currentBed', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF8B5CF6), fontFamily: 'Inter')),
+                                  ]),
+                                ),
                             ])),
-                            if (isSelected) const Icon(Icons.check_circle_rounded, color: AdminColors.primary),
+                            if (isSelected) Icon(Icons.check_circle_rounded,
+                              color: _isReallocateMode ? const Color(0xFF8B5CF6) : AdminColors.primary),
                           ]),
                         ),
                       );
@@ -229,6 +416,34 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
                 ),
               ]),
             ),
+            // ── Current allocation info (reallocate mode) ──
+            if (_isReallocateMode && _selectedResident != null) ...[
+              const SizedBox(height: 12),
+              Builder(builder: (ctx) {
+                final data = _selectedResident!.data() as Map<String, dynamic>;
+                final alloc = data['allocationDetails'] as Map<String, dynamic>?;
+                final hId = alloc?['hostelId']?.toString() ?? data['hostelId']?.toString() ?? '-';
+                final bedId = alloc?['bedId']?.toString() ?? data['bedId']?.toString() ?? '-';
+                return Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF8B5CF6).withOpacity(0.05),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: const Color(0xFF8B5CF6).withOpacity(0.2)),
+                  ),
+                  child: Row(children: [
+                    const Icon(Icons.info_outline_rounded, color: Color(0xFF8B5CF6), size: 20),
+                    const SizedBox(width: 12),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const Text('Current Allocation', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF8B5CF6), fontFamily: 'Inter')),
+                      const SizedBox(height: 4),
+                      Text('Hostel: $hId  •  Bed: $bedId', style: const TextStyle(fontSize: 12, color: Color(0xFF64748B), fontFamily: 'Inter')),
+                    ])),
+                    const Icon(Icons.arrow_forward_rounded, color: Color(0xFF8B5CF6), size: 18),
+                  ]),
+                );
+              }),
+            ],
             const SizedBox(height: 16),
             // ── Step 2: Location selection ──────────────
             AdminSectionCard(
@@ -306,10 +521,12 @@ class _AllocateResidentScreenState extends State<AllocateResidentScreen> {
             ],
             const SizedBox(height: 24),
             AdminPrimaryButton(
-              label: 'Confirm Allocation',
-              icon: Icons.check_rounded,
+              label: _isReallocateMode ? 'Confirm Reallocation' : 'Confirm Allocation',
+              icon: _isReallocateMode ? Icons.swap_horiz_rounded : Icons.check_rounded,
               isLoading: _allocating,
-              onPressed: _canAllocate ? _confirmAllocation : null,
+              onPressed: _canAllocate
+                ? (_isReallocateMode ? _confirmReallocation : _confirmAllocation)
+                : null,
             ),
           ]),
         )),
