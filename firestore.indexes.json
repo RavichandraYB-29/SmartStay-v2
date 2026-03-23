@@ -24,38 +24,72 @@
         { "fieldPath": "isAllocated", "order": "ASCENDING" },
         { "fieldPath": "allocatedAt", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "payments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "adminId", "order": "ASCENDING" },
+        { "fieldPath": "dueDate", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "payments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "adminId", "order": "ASCENDING" },
+        { "fieldPath": "paidAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "payments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "residentId", "order": "ASCENDING" },
+        { "fieldPath": "adminId", "order": "ASCENDING" },
+        { "fieldPath": "dueDate", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "payments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "residentId", "order": "ASCENDING" },
+        { "fieldPath": "userId", "order": "ASCENDING" },
+        { "fieldPath": "dueDate", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "payments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "residentId", "order": "ASCENDING" },
+        { "fieldPath": "userId", "order": "ASCENDING" },
+        { "fieldPath": "paidAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "notices",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "scope", "order": "ASCENDING" },
+        { "fieldPath": "senderRole", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" },
+        { "fieldPath": "pgIds", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "notices",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "scope", "order": "ASCENDING" },
+        { "fieldPath": "senderRole", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" },
+        { "fieldPath": "residentIds", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
     }
-  ,
-  {
-    "collectionGroup": "payments",
-    "queryScope": "COLLECTION",
-    "fields": [
-      { "fieldPath": "adminId", "order": "ASCENDING" },
-      { "fieldPath": "dueDate", "order": "ASCENDING" }
-    ]
-  },
-  {
-    "collectionGroup": "notices",
-    "queryScope": "COLLECTION",
-    "fields": [
-      { "fieldPath": "scope", "order": "ASCENDING" },
-      { "fieldPath": "senderRole", "order": "ASCENDING" },
-      { "fieldPath": "isActive", "order": "ASCENDING" },
-      { "fieldPath": "pgIds", "arrayConfig": "CONTAINS" },
-      { "fieldPath": "createdAt", "order": "DESCENDING" }
-    ]
-  },
-  {
-    "collectionGroup": "notices",
-    "queryScope": "COLLECTION",
-    "fields": [
-      { "fieldPath": "scope", "order": "ASCENDING" },
-      { "fieldPath": "senderRole", "order": "ASCENDING" },
-      { "fieldPath": "isActive", "order": "ASCENDING" },
-      { "fieldPath": "residentIds", "arrayConfig": "CONTAINS" },
-      { "fieldPath": "createdAt", "order": "DESCENDING" }
-    ]
-  }
   ],
   "fieldOverrides": []
 }

@@ -293,10 +293,24 @@ service cloud.firestore {
     /* ───────── PAYMENTS ───────── */
 
     match /payments/{paymentId} {
-      allow create, update, delete: if isAdminOwner(request.resource.data);
+      // Admin can create for admin-owned data
+      // Resident can create if: signed in, userId matches, status is paid, gateway is payu
+      allow create: if isAdminOwner(request.resource.data)
+        || (isSignedIn()
+          && request.resource.data.userId == request.auth.uid
+          && request.resource.data.status == 'paid'
+          && request.resource.data.paymentGateway == 'payu');
+
+      allow update, delete: if isAdminOwner(resource.data);
+
+      // Admin can read admin-owned data
+      // Resident can read if: userId matches OR residentId matches their resident record
       allow read: if isAdminOwner(resource.data)
         || isOwner(resource.data)
-        || isSelf(resource.data);
+        || (isSignedIn() && resource.data.userId == request.auth.uid)
+        || (isSignedIn()
+          && hasResidentRecord()
+          && resource.data.residentId == userDoc().data.residentId);
     }
 
     /* ───────── NOTICES ───────── */

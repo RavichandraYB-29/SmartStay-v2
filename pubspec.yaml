@@ -29,6 +29,11 @@ dependencies:
 
   # Local storage
   shared_preferences: ^2.2.2
+  crypto: ^3.0.7
+  url_launcher: ^6.3.2
+  universal_html: ^2.3.0
+  pdf: ^3.11.1
+  printing: ^5.13.3
 
 dev_dependencies:
   flutter_test:

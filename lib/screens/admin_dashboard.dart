@@ -8,6 +8,7 @@ import 'login_screen.dart';
 import 'hostel_management_screen.dart';
 import 'add_resident_screen.dart';
 import 'allocate_resident_screen.dart';
+import 'admin_payments_screen.dart';
 import '../utils/admin_design_system.dart';
 import '../widgets/admin_widgets.dart';
 
@@ -107,6 +108,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     _UpcomingFeeDuesCard(adminId: adminId),
                   ]);
                 }),
+                const SizedBox(height: 28),
+                // ── Resident Payments ─────────────────────
+                _ResidentPaymentsCard(adminId: adminId),
                 const SizedBox(height: 28),
                 // ── Complaints Management ────────────────
                 _ComplaintsCard(adminId: adminId),
@@ -261,10 +265,13 @@ class _StatsSectionState extends State<_StatsSection> {
   String _lastHostelKey = '';
   bool _fetching = false;
 
+  Map<String, int> _roomRents = {};
+
   /// Fetches all PG docs from hostels owned by this admin.
   Future<void> _fetchPgAggregates(List<QueryDocumentSnapshot> hostels) async {
     _fetching = true;
     int tb = 0, ab = 0;
+    Map<String, int> newRents = {};
     for (final hostel in hostels) {
       try {
         final pgSnap = await hostel.reference.collection('pgs').get();
@@ -272,6 +279,18 @@ class _StatsSectionState extends State<_StatsSection> {
           final d = pg.data();
           tb += _toInt(d['totalBeds']);
           ab += _toInt(d['availableBeds']);
+          
+          try {
+            final floorSnap = await pg.reference.collection('floors').get();
+            for (final floor in floorSnap.docs) {
+              final roomSnap = await floor.reference.collection('rooms').get();
+              for (final room in roomSnap.docs) {
+                final rent = _toInt(room.data()['rentPerBed'] ?? room.data()['monthlyFee'] ?? 0);
+                final key = '${hostel.id}/${pg.id}/${floor.id}/${room.id}';
+                newRents[key] = rent;
+              }
+            }
+          } catch (_) {}
         }
       } catch (_) {}
     }
@@ -280,6 +299,7 @@ class _StatsSectionState extends State<_StatsSection> {
       setState(() {
         _totalBeds = tb;
         _availBeds = ab;
+        _roomRents = newRents;
       });
     }
   }
@@ -317,12 +337,41 @@ class _StatsSectionState extends State<_StatsSection> {
             final availBeds = _availBeds;
             final occupied = (totalBeds - availBeds).clamp(0, totalBeds);
 
-            int pending = 0;
+            final Set<String> paidResidentIdsThisMonth = {};
+            final now = DateTime.now();
+            final currentMonthLabel = DateFormat('MMMM yyyy').format(now);
             for (final p in payments) {
               final d = p.data() as Map<String, dynamic>;
-              if ((d['status'] ?? '').toString().toLowerCase() == 'pending') {
-                pending += _toInt(d['amount'] ?? d['monthlyFee']);
+              final status = (d['status'] ?? '').toString().toLowerCase();
+              final isPaid = status == 'paid' || d['isPaid'] == true;
+              final month = d['month']?.toString() ?? '';
+              if (isPaid && month == currentMonthLabel) {
+                paidResidentIdsThisMonth.add(d['residentId']?.toString() ?? '');
               }
+            }
+
+            int pending = 0;
+            for (final doc in residents) {
+               final d = doc.data() as Map<String, dynamic>;
+               if (d['isAllocated'] != true) continue;
+               final residentId = doc.id;
+               if (paidResidentIdsThisMonth.contains(residentId)) continue;
+               
+               final alloc = d['allocationDetails'] as Map<String, dynamic>? ?? {};
+               final allocTs = alloc['allocatedAt'] as Timestamp? ?? d['allocatedAt'] as Timestamp?;
+               if (allocTs != null) {
+                  final allocDate = allocTs.toDate();
+                  final joinDay = allocDate.day.clamp(1, 28);
+                  final periodDue = DateTime(now.year, now.month, joinDay);
+                  if (now.isAfter(periodDue) || now.isAtSameMomentAs(periodDue)) {
+                     final hostelId = alloc['hostelId'] ?? d['hostelId'];
+                     final pgId = alloc['pgId'] ?? d['pgId'];
+                     final floorId = alloc['floorId'] ?? d['floorId'];
+                     final roomId = alloc['roomId'] ?? d['roomId'];
+                     final key = '$hostelId/$pgId/$floorId/$roomId';
+                     pending += _roomRents[key] ?? 0;
+                  }
+               }
             }
 
             final cards = [
@@ -643,17 +692,46 @@ class _FeeDuesListState extends State<_FeeDuesList> {
       // Calculate next due date
       final allocTs = alloc?['allocatedAt'] as Timestamp?;
       int daysLeft = 30;
+      int dueDay = 1;
       if (allocTs != null) {
         final allocDate = allocTs.toDate();
-        final dueDay = allocDate.day.clamp(1, 28);
-        var nextDue = DateTime(now.year, now.month, dueDay);
-        if (nextDue.isBefore(now) || nextDue.isAtSameMomentAs(now)) {
-          nextDue = DateTime(now.year, now.month + 1, dueDay);
+        dueDay = allocDate.day.clamp(1, 28);
+        var currentDue = DateTime(now.year, now.month, dueDay);
+        daysLeft = currentDue.difference(now).inDays;
+      }
+
+      // Check if already paid for current period
+      bool alreadyPaid = false;
+      try {
+        final paySnap = await FirebaseFirestore.instance
+            .collection('payments')
+            .where('residentId', isEqualTo: doc.id)
+            .where('adminId', isEqualTo: widget.adminId)
+            .orderBy('dueDate', descending: true)
+            .limit(1)
+            .get();
+        if (paySnap.docs.isNotEmpty) {
+          final pd = paySnap.docs.first.data();
+          final paidStatus = pd['status']?.toString().toLowerCase() ?? '';
+          final paidFlag = pd['isPaid'] == true;
+          // check if paid for current month
+          final isCurrentMonth = pd['month'] == DateFormat('MMMM yyyy').format(now);
+          if ((paidStatus == 'paid' || paidFlag) && isCurrentMonth) {
+            alreadyPaid = true;
+          }
         }
+      } catch (_) {}
+
+      if (alreadyPaid) {
+        // If paid, the next due date is next month
+        var nextDue = DateTime(now.year, now.month + 1, dueDay);
         daysLeft = nextDue.difference(now).inDays;
       }
 
-      items.add(_DueItem(name: name, roomNumber: roomNumber, rent: rent, daysLeft: daysLeft, residentId: doc.id));
+      // Only include if within 5 days (includes negatives for overdue)
+      if (daysLeft <= 5) {
+        items.add(_DueItem(name: name, roomNumber: roomNumber, rent: rent, daysLeft: daysLeft, residentId: doc.id));
+      }
     }
 
     items.sort((a, b) => a.daysLeft.compareTo(b.daysLeft));
@@ -696,6 +774,13 @@ class _FeeDuesListState extends State<_FeeDuesList> {
         }
 
         if (!_resolved) return const ShimmerBox(width: double.infinity, height: 120);
+
+        if (_resolvedItems.isEmpty) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Center(child: Text('No dues within 5 days', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13, fontFamily: 'Inter'))),
+          );
+        }
 
         return Column(children: _resolvedItems.map((item) => _FeeDueTile(item: item)).toList());
       },
@@ -753,11 +838,279 @@ class _FeeDueTile extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(color: badgeBg, borderRadius: BorderRadius.circular(6)),
                 child: Text(
-                  '${item.daysLeft} day${item.daysLeft == 1 ? '' : 's'} left',
+                  item.daysLeft < 0 
+                      ? '${item.daysLeft.abs()} day${item.daysLeft.abs() == 1 ? '' : 's'} late'
+                      : (item.daysLeft == 0 ? 'Due today' : '${item.daysLeft} day${item.daysLeft == 1 ? '' : 's'} left'),
                   style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: badgeColor, fontFamily: 'Inter'),
                 ),
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// RESIDENT PAYMENTS CARD
+// ─────────────────────────────────────────────
+class _ResidentPaymentsCard extends StatefulWidget {
+  final String adminId;
+  const _ResidentPaymentsCard({required this.adminId});
+
+  @override
+  State<_ResidentPaymentsCard> createState() => _ResidentPaymentsCardState();
+}
+
+class _ResidentPaymentsCardState extends State<_ResidentPaymentsCard> {
+  // Caches to avoid repeated Firestore reads
+  final Map<String, String> _nameCache = {};
+  final Map<String, String> _locationCache = {};
+
+  Future<String> _resolveName(String residentId) async {
+    if (_nameCache.containsKey(residentId)) return _nameCache[residentId]!;
+    try {
+      final snap = await FirebaseFirestore.instance.collection('residents').doc(residentId).get();
+      if (snap.exists) {
+        final name = (snap.data()?['fullName'] ?? snap.data()?['name'] ?? residentId).toString();
+        _nameCache[residentId] = name;
+        return name;
+      }
+    } catch (_) {}
+    _nameCache[residentId] = residentId;
+    return residentId;
+  }
+
+  Future<String> _resolveLocation(Map<String, dynamic> d) async {
+    final hostelId = d['hostelId']?.toString();
+    final pgId = d['pgId']?.toString();
+    final floorId = d['floorId']?.toString();
+    final roomId = d['roomId']?.toString();
+    if (hostelId == null || pgId == null) return '-';
+
+    final key = '$hostelId/$pgId/$floorId/$roomId';
+    if (_locationCache.containsKey(key)) return _locationCache[key]!;
+
+    String pgName = '';
+    String roomNumber = '';
+
+    try {
+      final pgSnap = await FirebaseFirestore.instance
+          .collection('hostels').doc(hostelId)
+          .collection('pgs').doc(pgId)
+          .get();
+      if (pgSnap.exists) {
+        pgName = (pgSnap.data()?['name'] ?? pgSnap.data()?['pgName'] ?? 'PG').toString();
+      }
+    } catch (_) {}
+
+    if (floorId != null && roomId != null) {
+      try {
+        final roomSnap = await FirebaseFirestore.instance
+            .collection('hostels').doc(hostelId)
+            .collection('pgs').doc(pgId)
+            .collection('floors').doc(floorId)
+            .collection('rooms').doc(roomId)
+            .get();
+        if (roomSnap.exists) {
+          roomNumber = (roomSnap.data()?['roomNumber'] ?? roomSnap.data()?['name'] ?? '').toString();
+        }
+      } catch (_) {}
+    }
+
+    final location = roomNumber.isNotEmpty
+        ? '$pgName · Room $roomNumber'
+        : pgName.isNotEmpty ? pgName : '-';
+    _locationCache[key] = location;
+    return location;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 20, offset: const Offset(0, 8))],
+        border: Border.all(color: const Color(0xFFF1F5F9)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(color: const Color(0xFFECFDF5), borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.receipt_long_rounded, size: 20, color: Color(0xFF10B981)),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text('Recent Payments', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, fontFamily: 'Inter', letterSpacing: -0.3)),
+            ),
+            GestureDetector(
+              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => AdminPaymentsScreen(adminId: widget.adminId))),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('View All', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF10B981), fontFamily: 'Inter')),
+                  SizedBox(width: 4),
+                  Icon(Icons.arrow_forward_rounded, size: 16, color: Color(0xFF10B981)),
+                ],
+              ),
+            ),
+          ]),
+          const SizedBox(height: 16),
+
+          // Table header
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8FAFC),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Row(
+              children: [
+                Expanded(flex: 3, child: Text('Resident', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF64748B), fontFamily: 'Inter', letterSpacing: 0.5))),
+                Expanded(flex: 2, child: Text('Amount', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF64748B), fontFamily: 'Inter', letterSpacing: 0.5))),
+                Expanded(flex: 2, child: Text('Date', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF64748B), fontFamily: 'Inter', letterSpacing: 0.5))),
+                Expanded(flex: 2, child: Text('Status', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF64748B), fontFamily: 'Inter', letterSpacing: 0.5))),
+                Expanded(flex: 2, child: Text('Location', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF64748B), fontFamily: 'Inter', letterSpacing: 0.5))),
+              ],
+            ),
+          ),
+          const SizedBox(height: 4),
+
+          // Payment rows
+          StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('payments')
+                .where('adminId', isEqualTo: widget.adminId)
+                .orderBy('paidAt', descending: true)
+                .snapshots(),
+            builder: (ctx, snap) {
+              if (snap.hasError) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
+                  child: Center(child: Text('Error: ${snap.error}', style: const TextStyle(color: Color(0xFFEF4444), fontSize: 12))),
+                );
+              }
+              if (!snap.hasData) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                );
+              }
+
+              final docs = snap.data!.docs.where((doc) {
+                final d = doc.data() as Map<String, dynamic>;
+                final status = d['status']?.toString().toLowerCase() ?? '';
+                return status == 'paid' || d['isPaid'] == true;
+              }).take(5).toList();
+
+              if (docs.isEmpty) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 28),
+                  child: Center(
+                    child: Column(
+                      children: [
+                        Icon(Icons.receipt_outlined, size: 36, color: Color(0xFFCBD5E1)),
+                        SizedBox(height: 8),
+                        Text(
+                          'No paid records yet',
+                          style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13, fontFamily: 'Inter'),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }
+
+              return Column(
+                children: docs.take(15).map((doc) {
+                  final d = doc.data() as Map<String, dynamic>;
+                  final residentId = d['residentId']?.toString() ?? '';
+                  final amount = d['amount'] ?? d['monthlyFee'] ?? 0;
+                  final paidAt = d['paidAt'] as Timestamp?;
+                  final status = d['status']?.toString() ?? 'unknown';
+                  final isPaid = status.toLowerCase() == 'paid' || d['isPaid'] == true;
+                  final month = d['month']?.toString() ?? '';
+
+                  final dateStr = paidAt != null
+                      ? DateFormat('MMM dd, yyyy').format(paidAt.toDate())
+                      : '-';
+
+                  return FutureBuilder<List<String>>(
+                    future: Future.wait([
+                      _resolveName(residentId),
+                      _resolveLocation(d),
+                    ]),
+                    builder: (ctx, resolvedSnap) {
+                      final name = resolvedSnap.data?[0] ?? residentId;
+                      final location = resolvedSnap.data?[1] ?? '-';
+
+                      return Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                        decoration: const BoxDecoration(
+                          border: Border(bottom: BorderSide(color: Color(0xFFF1F5F9))),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              flex: 3,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, fontFamily: 'Inter'), overflow: TextOverflow.ellipsis),
+                                  if (month.isNotEmpty)
+                                    Text(month, style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8), fontFamily: 'Inter')),
+                                ],
+                              ),
+                            ),
+                            Expanded(
+                              flex: 2,
+                              child: Text('\u20b9$amount', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, fontFamily: 'Inter')),
+                            ),
+                            Expanded(
+                              flex: 2,
+                              child: Text(dateStr, style: const TextStyle(fontSize: 12, color: Color(0xFF64748B), fontFamily: 'Inter')),
+                            ),
+                            Expanded(
+                              flex: 2,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: isPaid ? const Color(0xFFECFDF5) : const Color(0xFFFFF7ED),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  isPaid ? 'Paid' : status,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: isPaid ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                                    fontFamily: 'Inter',
+                                  ),
+                                ),
+                              ),
+                            ),
+                            Expanded(
+                              flex: 2,
+                              child: Text(
+                                location,
+                                style: const TextStyle(fontSize: 11, color: Color(0xFF64748B), fontFamily: 'Inter'),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  );
+                }).toList(),
+              );
+            },
           ),
         ],
       ),
@@ -809,6 +1162,7 @@ class _ComplaintsCard extends StatelessWidget {
             StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance
                   .collection('complaints')
+                  .where('adminId', isEqualTo: adminId)
                   .where('status', isEqualTo: 'pending')
                   .snapshots(),
               builder: (ctx, snap) {
@@ -837,6 +1191,7 @@ class _ComplaintsCard extends StatelessWidget {
           StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance
                 .collection('complaints')
+                .where('adminId', isEqualTo: adminId)
                 .snapshots(),
             builder: (ctx, snap) {
               if (snap.hasError) {

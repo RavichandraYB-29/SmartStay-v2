@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 
 import 'login_screen.dart';
 import 'resident_notices_screen.dart';
@@ -405,6 +408,7 @@ class _WelcomeBanner extends StatelessWidget {
       stream: FirebaseFirestore.instance
           .collection('payments')
           .where('residentId', isEqualTo: residentId)
+          .where('userId', isEqualTo: FirebaseAuth.instance.currentUser?.uid)
           .orderBy('paidAt', descending: true)
           .limit(12)
           .snapshots(),
@@ -1045,6 +1049,7 @@ class _QuickStatsCard extends StatelessWidget {
                   stream: FirebaseFirestore.instance
                       .collection('payments')
                       .where('residentId', isEqualTo: residentId)
+                      .where('userId', isEqualTo: FirebaseAuth.instance.currentUser?.uid)
                       .orderBy('dueDate', descending: true)
                       .limit(1)
                       .snapshots(),
@@ -1357,6 +1362,7 @@ class _PaymentSection extends StatelessWidget {
               stream: FirebaseFirestore.instance
                   .collection('payments')
                   .where('residentId', isEqualTo: residentId)
+                  .where('userId', isEqualTo: FirebaseAuth.instance.currentUser?.uid)
                   .orderBy('dueDate', descending: true)
                   .snapshots(),
               builder: (context, paymentSnap) {
@@ -1524,6 +1530,72 @@ class _PaymentSection extends StatelessWidget {
                         ),
                       ),
 
+                    // ── Days Left Warning ──
+                    if (!isPaid && calculatedDueDate != null) ...[
+                      const SizedBox(height: 14),
+                      () {
+                        final daysLeft = calculatedDueDate.difference(DateTime.now()).inDays;
+                        final isUrgent = daysLeft <= 3;
+                        final isNear = daysLeft <= 5;
+                        final warningColor = isUrgent
+                            ? const Color(0xFFEF4444)
+                            : isNear
+                                ? const Color(0xFFF59E0B)
+                                : teal;
+                        final bgColor = isUrgent
+                            ? const Color(0xFFFEF2F2)
+                            : isNear
+                                ? const Color(0xFFFFF7ED)
+                                : teal.withOpacity(0.06);
+                        final icon = isUrgent
+                            ? Icons.warning_amber_rounded
+                            : Icons.schedule_rounded;
+
+                        return Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          decoration: BoxDecoration(
+                            color: bgColor,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: warningColor.withOpacity(0.3)),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(icon, color: warningColor, size: 20),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  isOverdue
+                                      ? 'Payment overdue! Was due on ${DateFormat('MMM dd, yyyy').format(calculatedDueDate)}'
+                                      : 'Payment due by ${DateFormat('MMM dd, yyyy').format(calculatedDueDate)}',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: warningColor,
+                                  ),
+                                ),
+                              ),
+                              if (!isOverdue)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: warningColor.withOpacity(0.15),
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Text(
+                                    '$daysLeft day${daysLeft == 1 ? '' : 's'} left',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      color: warningColor,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        );
+                      }(),
+                    ],
+
                     const SizedBox(height: 28),
 
                     // ── Payment History Header ──
@@ -1654,6 +1726,25 @@ class _PaymentSection extends StatelessWidget {
                                   ),
                                 ),
                               ),
+                              if (docIsPaid) ...[
+                                const SizedBox(width: 8),
+                                GestureDetector(
+                                  onTap: () => _generateReceipt(
+                                    context: context,
+                                    month: monthDisplay,
+                                    amount: amt is int ? amt : (amt as num).toInt(),
+                                    paidOn: dateDisplay,
+                                    txnId: data['payuTxnId']?.toString() ?? data['paymentMode']?.toString() ?? '-',
+                                    paymentMode: data['paymentMode']?.toString() ?? 'Online',
+                                    residentId: residentId,
+                                  ),
+                                  child: const Icon(
+                                    Icons.download_rounded,
+                                    size: 18,
+                                    color: Color(0xFF64748B),
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
                         );
@@ -1665,6 +1756,106 @@ class _PaymentSection extends StatelessWidget {
           },
         ),
       ),
+    );
+  }
+
+  static Future<void> _generateReceipt({
+    required BuildContext context,
+    required String month,
+    required int amount,
+    required String paidOn,
+    required String txnId,
+    required String paymentMode,
+    required String residentId,
+  }) async {
+    final pdf = pw.Document();
+
+    String fmtAmt(int a) {
+      final s = a.toString();
+      final b = StringBuffer();
+      int c = 0;
+      for (int i = s.length - 1; i >= 0; i--) {
+        b.write(s[i]);
+        c++;
+        if (c == 3 && i > 0) { b.write(','); c = 0; }
+        else if (c > 3 && (c - 3) % 2 == 0 && i > 0) { b.write(','); }
+      }
+      return b.toString().split('').reversed.join();
+    }
+
+    pdf.addPage(
+      pw.Page(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(40),
+        build: (pw.Context pdfCtx) {
+          return pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Container(
+                width: double.infinity,
+                padding: const pw.EdgeInsets.all(20),
+                decoration: pw.BoxDecoration(
+                  color: PdfColor.fromHex('#14B8A6'),
+                  borderRadius: pw.BorderRadius.circular(8),
+                ),
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text('SmartStay', style: pw.TextStyle(fontSize: 28, fontWeight: pw.FontWeight.bold, color: PdfColors.white)),
+                    pw.SizedBox(height: 4),
+                    pw.Text('Payment Receipt', style: pw.TextStyle(fontSize: 16, color: PdfColor.fromHex('#E0F2F1'))),
+                  ],
+                ),
+              ),
+              pw.SizedBox(height: 30),
+              pw.Container(
+                padding: const pw.EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: pw.BoxDecoration(color: PdfColor.fromHex('#D1FAE5'), borderRadius: pw.BorderRadius.circular(20)),
+                child: pw.Text('PAYMENT SUCCESSFUL', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: PdfColor.fromHex('#065F46'))),
+              ),
+              pw.SizedBox(height: 24),
+              pw.Table(
+                border: pw.TableBorder.all(color: PdfColor.fromHex('#E2E8F0'), width: 0.5),
+                children: [
+                  _pdfRow('Billing Month', month),
+                  _pdfRow('Amount Paid', 'Rs. ${fmtAmt(amount)}'),
+                  _pdfRow('Paid On', paidOn),
+                  _pdfRow('Transaction ID', txnId),
+                  _pdfRow('Payment Mode', paymentMode),
+                  _pdfRow('Resident ID', residentId),
+                  _pdfRow('Receipt Date', DateFormat('MMM dd, yyyy \u2013 hh:mm a').format(DateTime.now())),
+                ],
+              ),
+              pw.SizedBox(height: 40),
+              pw.Divider(color: PdfColor.fromHex('#E2E8F0')),
+              pw.SizedBox(height: 12),
+              pw.Text('This is a computer-generated receipt and does not require a signature.', style: pw.TextStyle(fontSize: 10, color: PdfColor.fromHex('#94A3B8'))),
+              pw.SizedBox(height: 4),
+              pw.Text('Powered by SmartStay Hostel Management', style: pw.TextStyle(fontSize: 10, color: PdfColor.fromHex('#94A3B8'))),
+            ],
+          );
+        },
+      ),
+    );
+
+    await Printing.layoutPdf(
+      onLayout: (PdfPageFormat format) async => pdf.save(),
+      name: 'SmartStay_Receipt_${month.replaceAll(' ', '_')}',
+    );
+  }
+
+  static pw.TableRow _pdfRow(String label, String value) {
+    return pw.TableRow(
+      children: [
+        pw.Padding(
+          padding: const pw.EdgeInsets.all(10),
+          child: pw.Text(label, style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: PdfColor.fromHex('#475569'))),
+        ),
+        pw.Padding(
+          padding: const pw.EdgeInsets.all(10),
+          child: pw.Text(value, style: pw.TextStyle(fontSize: 12, color: PdfColor.fromHex('#1E293B'))),
+        ),
+      ],
     );
   }
 }

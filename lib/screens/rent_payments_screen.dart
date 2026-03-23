@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+import '../services/payu_service.dart';
 
 class RentPaymentsScreen extends StatelessWidget {
   final String residentId;
@@ -76,12 +81,21 @@ class RentPaymentsScreen extends StatelessWidget {
           (floorIndex != null ? 'Floor $floorIndex' : '-');
 
       return {
+        'hostelId': hId,
+        'pgId': pId,
+        'floorId': fId,
+        'roomId': rId,
+        'bedId': allocation?['bedId']?.toString() ?? residentData['bedId']?.toString(),
         'hostelName': hostelName,
         'floorLabel': floorLabel,
         'roomNumber': roomData?['roomNumber']?.toString() ?? '-',
         'sharingType': roomData?['sharingType']?.toString() ?? '-',
         'rentPerBed': roomData?['rentPerBed'],
         'allocatedAt': allocatedAtTs,
+        'adminId': hostelData?['adminId'],
+        'residentName': residentData['name'] ?? residentData['fullName'] ?? 'Resident',
+        'email': residentData['email'] ?? 'test@example.com',
+        'phone': residentData['phone'] ?? '9999999999',
       };
     } catch (_) {
       return {};
@@ -439,6 +453,7 @@ class RentPaymentsScreen extends StatelessWidget {
                         stream: FirebaseFirestore.instance
                             .collection('payments')
                             .where('residentId', isEqualTo: residentId)
+                            .where('userId', isEqualTo: FirebaseAuth.instance.currentUser?.uid)
                             .orderBy('dueDate', descending: true)
                             .limit(1)
                             .snapshots(),
@@ -653,8 +668,20 @@ class RentPaymentsScreen extends StatelessWidget {
                                       child: ElevatedButton.icon(
                                         onPressed: isPaid ? null : () {
                                           _showPaymentMethodDialog(
-                                            context,
-                                            amountToDisplay is int ? amountToDisplay : (amountToDisplay as num).toInt(),
+                                            context: context,
+                                            amount: amountToDisplay is int ? amountToDisplay : (amountToDisplay as num).toInt(),
+                                            residentId: residentId,
+                                            adminId: data['adminId']?.toString() ?? '', // we need to fetch adminId
+                                            monthLabel: billingMonth,
+                                            dueDate: dueDateTs ?? (dueDateToUse != null ? Timestamp.fromDate(dueDateToUse) : null),
+                                            hostelId: data['hostelId']?.toString() ?? hostelId,
+                                            pgId: data['pgId']?.toString() ?? pgId,
+                                            floorId: data['floorId']?.toString() ?? floorId,
+                                            roomId: data['roomId']?.toString() ?? roomId,
+                                            bedId: data['bedId']?.toString(), // Get these from _fetchRoomDetails
+                                            residentName: (data['residentName'] ?? '').toString(),
+                                            email: (data['email'] ?? '').toString(),
+                                            phone: (data['phone'] ?? '').toString(),
                                           );
                                         },
                                         icon: const Icon(Icons.attach_money_rounded, size: 18),
@@ -844,6 +871,7 @@ class RentPaymentsScreen extends StatelessWidget {
                               stream: FirebaseFirestore.instance
                                   .collection('payments')
                                   .where('residentId', isEqualTo: residentId)
+                                  .where('userId', isEqualTo: FirebaseAuth.instance.currentUser?.uid)
                                   .orderBy('dueDate', descending: true)
                                   .snapshots(),
                               builder: (context, histSnap) {
@@ -971,12 +999,25 @@ class RentPaymentsScreen extends StatelessWidget {
                                           SizedBox(
                                             width: 50,
                                             child: Center(
-                                              child: Icon(
-                                                Icons.download_rounded,
-                                                color: docIsPaid
-                                                    ? const Color(0xFF64748B)
-                                                    : const Color(0xFFCBD5E1),
-                                                size: 20,
+                                              child: GestureDetector(
+                                                onTap: docIsPaid
+                                                    ? () => _generateReceipt(
+                                                          context: context,
+                                                          month: monthDisplay,
+                                                          amount: amt is int ? amt : (amt as num).toInt(),
+                                                          paidOn: paidOnDisplay,
+                                                          txnId: d['payuTxnId']?.toString() ?? d['paymentMode']?.toString() ?? '-',
+                                                          paymentMode: d['paymentMode']?.toString() ?? 'Online',
+                                                          residentId: residentId,
+                                                        )
+                                                    : null,
+                                                child: Icon(
+                                                  Icons.download_rounded,
+                                                  color: docIsPaid
+                                                      ? const Color(0xFF64748B)
+                                                      : const Color(0xFFCBD5E1),
+                                                  size: 20,
+                                                ),
                                               ),
                                             ),
                                           ),
@@ -1019,6 +1060,164 @@ class RentPaymentsScreen extends StatelessWidget {
     }
     return buffer.toString().split('').reversed.join();
   }
+
+  static Future<void> _generateReceipt({
+    required BuildContext context,
+    required String month,
+    required int amount,
+    required String paidOn,
+    required String txnId,
+    required String paymentMode,
+    required String residentId,
+  }) async {
+    final pdf = pw.Document();
+
+    String fmtAmt(int a) {
+      final s = a.toString();
+      final b = StringBuffer();
+      int c = 0;
+      for (int i = s.length - 1; i >= 0; i--) {
+        b.write(s[i]);
+        c++;
+        if (c == 3 && i > 0) { b.write(','); c = 0; }
+        else if (c > 3 && (c - 3) % 2 == 0 && i > 0) { b.write(','); }
+      }
+      return b.toString().split('').reversed.join();
+    }
+
+    pdf.addPage(
+      pw.Page(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(40),
+        build: (pw.Context pdfCtx) {
+          return pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              // Header
+              pw.Container(
+                width: double.infinity,
+                padding: const pw.EdgeInsets.all(20),
+                decoration: pw.BoxDecoration(
+                  color: PdfColor.fromHex('#14B8A6'),
+                  borderRadius: pw.BorderRadius.circular(8),
+                ),
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text(
+                      'SmartStay',
+                      style: pw.TextStyle(
+                        fontSize: 28,
+                        fontWeight: pw.FontWeight.bold,
+                        color: PdfColors.white,
+                      ),
+                    ),
+                    pw.SizedBox(height: 4),
+                    pw.Text(
+                      'Payment Receipt',
+                      style: pw.TextStyle(
+                        fontSize: 16,
+                        color: PdfColor.fromHex('#E0F2F1'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              pw.SizedBox(height: 30),
+
+              // Status badge
+              pw.Container(
+                padding: const pw.EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: pw.BoxDecoration(
+                  color: PdfColor.fromHex('#D1FAE5'),
+                  borderRadius: pw.BorderRadius.circular(20),
+                ),
+                child: pw.Text(
+                  'PAYMENT SUCCESSFUL',
+                  style: pw.TextStyle(
+                    fontSize: 12,
+                    fontWeight: pw.FontWeight.bold,
+                    color: PdfColor.fromHex('#065F46'),
+                  ),
+                ),
+              ),
+              pw.SizedBox(height: 24),
+
+              // Details table
+              pw.Table(
+                border: pw.TableBorder.all(
+                  color: PdfColor.fromHex('#E2E8F0'),
+                  width: 0.5,
+                ),
+                children: [
+                  _pdfTableRow('Billing Month', month),
+                  _pdfTableRow('Amount Paid', 'Rs. ${fmtAmt(amount)}'),
+                  _pdfTableRow('Paid On', paidOn),
+                  _pdfTableRow('Transaction ID', txnId),
+                  _pdfTableRow('Payment Mode', paymentMode),
+                  _pdfTableRow('Resident ID', residentId),
+                  _pdfTableRow('Receipt Date', DateFormat('MMM dd, yyyy – hh:mm a').format(DateTime.now())),
+                ],
+              ),
+              pw.SizedBox(height: 40),
+
+              // Footer
+              pw.Divider(color: PdfColor.fromHex('#E2E8F0')),
+              pw.SizedBox(height: 12),
+              pw.Text(
+                'This is a computer-generated receipt and does not require a signature.',
+                style: pw.TextStyle(
+                  fontSize: 10,
+                  color: PdfColor.fromHex('#94A3B8'),
+                ),
+              ),
+              pw.SizedBox(height: 4),
+              pw.Text(
+                'Powered by SmartStay Hostel Management',
+                style: pw.TextStyle(
+                  fontSize: 10,
+                  color: PdfColor.fromHex('#94A3B8'),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    await Printing.layoutPdf(
+      onLayout: (PdfPageFormat format) async => pdf.save(),
+      name: 'SmartStay_Receipt_${month.replaceAll(' ', '_')}',
+    );
+  }
+
+  static pw.TableRow _pdfTableRow(String label, String value) {
+    return pw.TableRow(
+      children: [
+        pw.Padding(
+          padding: const pw.EdgeInsets.all(10),
+          child: pw.Text(
+            label,
+            style: pw.TextStyle(
+              fontSize: 12,
+              fontWeight: pw.FontWeight.bold,
+              color: PdfColor.fromHex('#475569'),
+            ),
+          ),
+        ),
+        pw.Padding(
+          padding: const pw.EdgeInsets.all(10),
+          child: pw.Text(
+            value,
+            style: pw.TextStyle(
+              fontSize: 12,
+              color: PdfColor.fromHex('#1E293B'),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class _DetailItem extends StatelessWidget {
@@ -1058,7 +1257,22 @@ class _DetailItem extends StatelessWidget {
 // PAYMENT METHOD DIALOG
 // ═══════════════════════════════════════════════════════
 
-void _showPaymentMethodDialog(BuildContext context, int amount) {
+void _showPaymentMethodDialog({
+  required BuildContext context,
+  required int amount,
+  required String residentId,
+  required String adminId,
+  required String monthLabel,
+  Timestamp? dueDate,
+  String? hostelId,
+  String? pgId,
+  String? floorId,
+  String? roomId,
+  String? bedId,
+  required String residentName,
+  required String email,
+  required String phone,
+}) {
   const teal = Color(0xFF14B8A6);
 
   String _fmt(int a) {
@@ -1085,6 +1299,18 @@ void _showPaymentMethodDialog(BuildContext context, int amount) {
         amount: amount,
         formattedAmount: _fmt(amount),
         teal: teal,
+        residentId: residentId,
+        adminId: adminId,
+        monthLabel: monthLabel,
+        dueDate: dueDate,
+        hostelId: hostelId,
+        pgId: pgId,
+        floorId: floorId,
+        roomId: roomId,
+        bedId: bedId,
+        residentName: residentName,
+        email: email,
+        phone: phone,
       );
     },
   );
@@ -1094,11 +1320,35 @@ class _PaymentMethodDialogContent extends StatefulWidget {
   final int amount;
   final String formattedAmount;
   final Color teal;
+  final String residentId;
+  final String adminId;
+  final String monthLabel;
+  final Timestamp? dueDate;
+  final String? hostelId;
+  final String? pgId;
+  final String? floorId;
+  final String? roomId;
+  final String? bedId;
+  final String residentName;
+  final String email;
+  final String phone;
 
   const _PaymentMethodDialogContent({
     required this.amount,
     required this.formattedAmount,
     required this.teal,
+    required this.residentId,
+    required this.adminId,
+    required this.monthLabel,
+    this.dueDate,
+    this.hostelId,
+    this.pgId,
+    this.floorId,
+    this.roomId,
+    this.bedId,
+    required this.residentName,
+    required this.email,
+    required this.phone,
   });
 
   @override
@@ -1239,16 +1489,9 @@ class _PaymentMethodDialogContentState
                         title: 'Credit / Debit Card',
                         subtitle: 'Visa, Mastercard, RuPay',
                         isSelected: _selectedMethod == 'card',
-                        isAvailable: false,
+                        isAvailable: true,
                         teal: teal,
-                        onTap: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Credit/Debit Card payment is coming soon!'),
-                              duration: Duration(seconds: 2),
-                            ),
-                          );
-                        },
+                        onTap: () => setState(() => _selectedMethod = 'card'),
                       ),
                     ),
                   ],
@@ -1263,16 +1506,9 @@ class _PaymentMethodDialogContentState
                         title: 'Net Banking',
                         subtitle: 'All major banks',
                         isSelected: _selectedMethod == 'netbanking',
-                        isAvailable: false,
+                        isAvailable: true,
                         teal: teal,
-                        onTap: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Net Banking payment is coming soon!'),
-                              duration: Duration(seconds: 2),
-                            ),
-                          );
-                        },
+                        onTap: () => setState(() => _selectedMethod = 'netbanking'),
                       ),
                     ),
                     const SizedBox(width: 14),
@@ -1283,16 +1519,9 @@ class _PaymentMethodDialogContentState
                         title: 'Digital Wallet',
                         subtitle: 'Paytm, PhonePe Wallet',
                         isSelected: _selectedMethod == 'wallet',
-                        isAvailable: false,
+                        isAvailable: true,
                         teal: teal,
-                        onTap: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Digital Wallet payment is coming soon!'),
-                              duration: Duration(seconds: 2),
-                            ),
-                          );
-                        },
+                        onTap: () => setState(() => _selectedMethod = 'wallet'),
                       ),
                     ),
                   ],
@@ -1322,7 +1551,7 @@ class _PaymentMethodDialogContentState
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             const Text(
-                              'Secure Payment',
+                              'Secure Payment via PayU',
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w700,
@@ -1331,7 +1560,7 @@ class _PaymentMethodDialogContentState
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              'Your payment information is encrypted and secure. We never store your card details.',
+                              'Your payment information is encrypted and secure. Supported by PayU gateway.',
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w500,
@@ -1352,23 +1581,25 @@ class _PaymentMethodDialogContentState
                   width: double.infinity,
                   child: ElevatedButton.icon(
                     onPressed: () {
-                      if (_selectedMethod == 'upi') {
-                        Navigator.pop(context);
-                        // TODO: Navigate to UPI payment flow
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text('Opening UPI payment for ₹${widget.formattedAmount}...'),
-                            duration: const Duration(seconds: 2),
-                          ),
-                        );
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('This payment method is coming soon!'),
-                            duration: Duration(seconds: 2),
-                          ),
-                        );
-                      }
+                      // Don't pop dialog here — payu_service closes it
+                      // after capturing the navigator context.
+                      final payuService = PayUService();
+                      payuService.startPayment(
+                        context: context,
+                        residentId: widget.residentId,
+                        adminId: widget.adminId,
+                        amount: widget.amount,
+                        name: widget.residentName,
+                        email: widget.email,
+                        phone: widget.phone,
+                        monthLabel: widget.monthLabel,
+                        dueDate: widget.dueDate,
+                        hostelId: widget.hostelId,
+                        pgId: widget.pgId,
+                        floorId: widget.floorId,
+                        roomId: widget.roomId,
+                        bedId: widget.bedId,
+                      );
                     },
                     icon: const Icon(Icons.verified_outlined, size: 20),
                     label: const Text(
