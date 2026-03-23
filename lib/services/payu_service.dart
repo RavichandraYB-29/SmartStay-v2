@@ -5,15 +5,16 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:universal_html/html.dart' as html;
+import '../config/env.dart';
 import '../screens/payment_waiting_screen.dart';
 
 class PayUService {
-  // Test credentials
-  static const String merchantKey = '3ywZnk';
-  static const String merchantSalt = '6iCuFpgpQBelPoJlanIc09w3tGgzLaB3';
-
-  // Test endpoint
-  static const String payuUrl = 'https://test.payu.in/_payment';
+  // Credentials from env.dart (git-ignored)
+  static String get _merchantKey  => Env.payuMerchantKey;
+  static String get _merchantSalt => Env.payuMerchantSalt;
+  static String get _payuUrl => Env.payuIsProduction
+      ? 'https://secure.payu.in/_payment'
+      : 'https://test.payu.in/_payment';
 
   /// Start the PayU Checkout flow via the REAL test gateway.
   void startPayment({
@@ -39,7 +40,7 @@ class PayUService {
 
     // 2. Generate SHA-512 Hash
     final hashSequence =
-        '$merchantKey|$txnId|$amountStr|$productInfo|$name|$email|||||||||||$merchantSalt';
+        '$_merchantKey|$txnId|$amountStr|$productInfo|$name|$email|||||||||||$_merchantSalt';
     final hashResult = sha512.convert(utf8.encode(hashSequence)).toString();
 
     // 3. Success/Failure redirect URL — a simple "close this tab" page
@@ -72,7 +73,7 @@ class PayUService {
       // Create and submit the form to PayU in a new tab
       final form = html.FormElement()
         ..method = 'POST'
-        ..action = payuUrl
+        ..action = _payuUrl
         ..target = '_blank';
 
       void addHiddenInput(String fieldName, String value) {
@@ -83,7 +84,7 @@ class PayUService {
         form.append(input);
       }
 
-      addHiddenInput('key', merchantKey);
+      addHiddenInput('key', _merchantKey);
       addHiddenInput('hash', hashResult);
       addHiddenInput('txnid', txnId);
       addHiddenInput('amount', amountStr);
@@ -131,8 +132,8 @@ class PayUService {
             <h3>Redirecting to Secure Payment Gateway...</h3>
             <p>Please wait, do not refresh this page.</p>
           </div>
-          <form id="payu" name="payu" method="post" action="$payuUrl">
-            <input type="hidden" name="key" value="$merchantKey" />
+          <form id="payu" name="payu" method="post" action="$_payuUrl">
+            <input type="hidden" name="key" value="$_merchantKey" />
             <input type="hidden" name="hash" value="$hashResult" />
             <input type="hidden" name="txnid" value="$txnId" />
             <input type="hidden" name="amount" value="$amountStr" />

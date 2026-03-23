@@ -1,213 +1,189 @@
-# flutter_application_1
+# SmartStay 🏨
 
-A new Flutter project.
+![Flutter](https://img.shields.io/badge/Flutter-3.10+-02569B?logo=flutter&logoColor=white)
+![Firebase](https://img.shields.io/badge/Firebase-Firestore%20%7C%20Auth-FFCA28?logo=firebase&logoColor=black)
+![License](https://img.shields.io/badge/License-MIT-green)
 
-## Getting Started
-
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
-# SmartStay 🏨  
-### Digital PG & Hostel Management System
-
-SmartStay is a modern **Flutter-based hostel and PG management application** designed to digitize resident onboarding, room allocation, and administrative operations.
-
-It replaces manual registers and spreadsheets with a **role-based, scalable, Firebase-powered system**.
+> **Open-source PG and hostel management system** built with Flutter & Firebase.  
+> Separate dashboards for admins and residents — room allocation, rent payments, complaints, notices, and more.
 
 ---
 
-## 🚀 Project Overview
+## ✨ Features
 
-SmartStay focuses on solving real-world problems faced by PG and hostel owners:
+### 🔑 Admin
 
-- Resident self-registration
-- Centralized hostel, floor, and room management
-- Controlled room & bed allocation by admin
-- Clear visibility of occupancy and vacancies
-- Clean, modular UI ready for future scaling
+- Multi-hostel / PG / floor / room hierarchy management
+- Bed-level allocation & reallocation with visual bed grid
+- Dynamic KPI dashboard — occupancy, pending dues, recent activity
+- Payment tracking with paid / pending / overdue status
+- Complaint management with priority, category & status workflow
+- Notice broadcasting to residents
+- Invite residents via email with auto-generated credentials
 
----
+### 👤 Resident
 
-## 👥 User Roles
-
-### 👤 Admin
-- Manage hostels, floors, rooms, and beds
-- View registered (unallocated) residents
-- Allocate residents to hostel → floor → room → bed
-- Track occupancy and vacancies
-- View revenue insights (UI ready)
-
-### 🧑‍🎓 Resident
-- Self-register using Email/Password or Google Sign-In
-- View allocated hostel, room, and bed
-- Access personal dashboard (future scope)
+- Personal dashboard with room, payment & roommate info
+- Online rent payments via PayU gateway
+- Raise & track complaints with real-time status updates
+- View notices posted by admin
+- Password management & profile settings
 
 ---
 
-## 🧩 Initial Module Plan
+## 🛠 Tech Stack
 
-1. Authentication System  
-2. Admin Dashboard  
-3. Hostel Management  
-4. Floor Management  
-5. Room Management  
-6. Resident Management  
-7. Allocation Logic  
-8. Revenue & Analytics  
-9. Notifications & Utilities  
-
----
-
-## 🔄 Changes During Development
-
-The architecture evolved based on real hostel workflows:
-
-- ✅ **Resident self-registration introduced**
-- ✅ Admin no longer manually creates residents
-- ✅ Residents appear as **unallocated** until assigned
-- ✅ Two-step flow:
-  1. Resident registers
-  2. Admin allocates hostel / floor / room / bed
-
-- ✅ Room logic enhanced:
-  - Sharing type (1 / 2 / 3 / 4 sharing)
-  - Auto-calculated total beds
-  - Occupied & vacant bed tracking
-  - Over-allocation prevention
-
-- ✅ UI finalized before full database binding
+| Technology | Purpose |
+|------------|---------|
+| **Flutter** (Dart) | Cross-platform UI (Web, Android, macOS) |
+| **Cloud Firestore** | Real-time NoSQL database |
+| **Firebase Auth** | Email/Password + Google Sign-In |
+| **PayU** | Payment gateway integration |
+| **fl_chart** | Interactive charts & graphs |
+| **pdf / printing** | PDF generation & printing |
+| **Inter** (Google Fonts) | Typography |
 
 ---
 
-## 📦 Current Modules
+## 🚀 Getting Started
 
-### 1️⃣ Authentication
-- Email & Password login
-- Google Sign-In
-- Forgot Password dialog
-- Loading overlays & success dialogs
-- Role-based routing (Admin / Resident)
+### Prerequisites
 
----
+- Flutter SDK `^3.10.4`
+- Firebase CLI (`npm install -g firebase-tools`)
+- FlutterFire CLI (`dart pub global activate flutterfire_cli`)
 
-### 2️⃣ Admin Dashboard
-- Summary cards:
-  - Hostels
-  - Floors
-  - Rooms
-  - Residents
-- Quick actions:
-  - Add Hostel
-  - Add Floor
-  - Add Room
-  - Add / Allocate Resident
-- Revenue chart (UI stage)
+### Step 1 — Clone & install
 
----
+```bash
+git clone https://github.com/YOUR_USERNAME/SmartStay-v2.git
+cd SmartStay-v2
+flutter pub get
+```
 
-### 3️⃣ Hostel Management
-- Multiple hostels support
-- Structured hierarchy
-- Future-ready for hostel chains
+### Step 2 — Firebase setup
 
----
+1. Create a project at [console.firebase.google.com](https://console.firebase.google.com)
+2. Enable **Authentication** → Email/Password + Google Sign-In
+3. Enable **Cloud Firestore**
+4. Generate your config:
 
-### 4️⃣ Floor Management
-- Floors mapped to hostels
-- Floor-wise room organization
+```bash
+flutterfire configure
+```
 
----
+This creates `lib/firebase_options.dart` (git-ignored).
 
-### 5️⃣ Room Management
-- Room number
-- Sharing type
-- Total beds (auto-derived)
-- Occupied beds
-- Vacant beds
-- Visual status indicators
+> See [SETUP.md](SETUP.md) for detailed Firebase setup instructions.
 
----
+### Step 3 — PayU credentials
 
-### 6️⃣ Resident Management
-- Self-registration
-- Gender & basic profile info
-- Active / inactive status
-- Appears unallocated until assigned
+```bash
+cp lib/config/env.dart.example lib/config/env.dart
+```
 
----
+Edit `lib/config/env.dart` and fill in your PayU merchant key & salt.
 
-### 7️⃣ Allocation System (Core Logic)
-- Admin selects:
-  - Resident → Hostel → Floor → Room → Bed
-- Validates:
-  - Room capacity
-  - Bed availability
-- Updates occupancy in real time
+### Step 4 — Deploy Firestore rules & indexes
+
+```bash
+firebase deploy --only firestore:rules,firestore:indexes
+```
+
+> `firestore.rules` and `firestore.indexes.json` are included in the repo.
+
+### Step 5 — Run
+
+```bash
+flutter run -d chrome        # Web
+flutter run -d android       # Android
+flutter run -d macos         # macOS
+```
 
 ---
 
-### 8️⃣ Revenue & Analytics (Planned)
-- Monthly revenue chart
-- Occupancy-based calculations
-- Extendable for rent & dues
+## 📁 Project Structure
+
+```
+lib/
+├── main.dart                          # App entry point
+├── firebase_options.dart              # 🔒 Git-ignored
+├── theme.dart                         # App-wide ThemeData
+│
+├── config/
+│   ├── env.dart                       # 🔒 Git-ignored (PayU credentials)
+│   └── env.dart.example               # Template for env.dart
+│
+├── screens/
+│   ├── login_screen.dart              # Email + Google Sign-In
+│   ├── set_password_screen.dart       # First-time password setup
+│   ├── admin_dashboard.dart           # Admin home with KPIs
+│   ├── admin_payments_screen.dart     # Payment history & filtering
+│   ├── hostel_management_screen.dart  # CRUD hostels
+│   ├── floor_management_screen.dart   # Floor management
+│   ├── room_management_screen.dart    # Room management
+│   ├── add_hostel_dialog.dart         # Add hostel
+│   ├── edit_hostel_dialog.dart        # Edit hostel
+│   ├── add_floor_dialog.dart          # Add floor
+│   ├── add_room_dialog.dart           # Add room
+│   ├── add_resident_screen.dart       # Invite residents
+│   ├── allocate_resident_screen.dart  # Allocate / reallocate
+│   ├── resident_dashboard.dart        # Resident home
+│   ├── rent_payments_screen.dart      # Resident payment flow
+│   ├── payment_waiting_screen.dart    # Payment processing
+│   ├── payment_status_screen.dart     # Payment result
+│   ├── raise_complaint_screen.dart    # Complaints
+│   └── resident_notices_screen.dart   # Notices
+│
+├── services/
+│   ├── allocation_service.dart        # Allocation logic
+│   ├── payu_service.dart              # PayU gateway
+│   └── room_service.dart              # Room helpers
+│
+├── utils/
+│   └── admin_design_system.dart       # Colors, gradients, shadows
+│
+├── widgets/
+│   ├── admin_widgets.dart             # Reusable admin components
+│   ├── custom_textfield.dart          # Styled text fields
+│   ├── dashboard_widgets.dart         # Dashboard cards
+│   ├── forgot_password_dialog.dart    # Password reset
+│   ├── gradient_button.dart           # Gradient button
+│   ├── loading_overlay.dart           # Loading overlay
+│   ├── revenue_chart.dart             # Revenue chart
+│   └── success_dialog.dart            # Success dialog
+│
+└── theme/
+    ├── app_colors.dart                # Color constants
+    ├── app_text_styles.dart           # Text styles
+    └── theme_controller.dart          # Light / dark mode
+```
 
 ---
 
-### 9️⃣ Reusable UI Components
-- Gradient buttons
-- Custom text fields
-- Success dialogs
-- Loading overlays
-- Centralized theme & colors
+## 🗄 Firestore Data Structure
+
+```
+users/{uid}                            # role, name, email
+residents/{id}                         # fullName, email, adminId, allocationDetails
+hostels/{id}                           # name, ownerId
+  └── pgs/{id}                         # name, totalBeds, availableBeds
+       └── floors/{id}                 # floorName, floorIndex
+            └── rooms/{id}             # roomNumber, totalBeds, rentPerBed
+                 └── beds/{id}         # bedNumber, isOccupied, residentId
+payments/{id}                          # residentId, adminId, amount, status, paidAt
+complaints/{id}                        # residentId, adminId, title, status, priority
+notices/{id}                           # title, body, createdByAdminId
+```
 
 ---
 
-## 🛠️ Tech Stack
+## 🤝 Contributing
 
-- **Frontend:** Flutter (Material UI)
-- **Backend:** Firebase
-  - Authentication
-  - Cloud Firestore
-- **Architecture:** Modular & scalable
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a PR.
 
 ---
 
-## 📌 Current Status
+## 📄 License
 
-- ✔ UI & UX finalized  
-- ✔ Core logic implemented  
-- ✔ Allocation flow defined  
-- 🔄 Firestore integration in progress  
-- 🔜 Payments, complaints, notifications (future)
-
----
-
-## 🔮 Future Enhancements
-
-- Online rent payments
-- Maintenance / complaint system
-- Advanced admin analytics
-- Staff roles
-- Web & mobile builds
-
----
-
-## 🧠 Why SmartStay?
-
-SmartStay is designed around **real hostel operations**, not just CRUD screens.  
-Its **allocation-first design** and **scalable structure** make it ideal for:
-
-- PG owners
-- Hostel chains
-- Student accommodations
-- Co-living spaces
-
-
-
+This project is licensed under the [MIT License](LICENSE).
