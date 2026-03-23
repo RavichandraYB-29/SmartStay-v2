@@ -44,12 +44,18 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
-# Firebase & sensitive config (DO NOT COMMIT)
+# Firebase credentials — NEVER COMMIT
 lib/firebase_options.dart
-lib/config/env.dart
+.firebaserc
+firebase.json
 android/app/google-services.json
 ios/Runner/GoogleService-Info.plist
 macos/Runner/GoogleService-Info.plist
+
+# PayU credentials — NEVER COMMIT
+lib/config/env.dart
+
+# Environment files — NEVER COMMIT
 .env
 *.env
 config.json

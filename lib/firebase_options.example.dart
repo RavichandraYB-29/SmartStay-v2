@@ -1,20 +1,18 @@
-// ──────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────
 // firebase_options.example.dart
-// ──────────────────────────────────────────────────────────────────────────
-// This is a TEMPLATE file. The real firebase_options.dart is excluded from
-// version control for security reasons.
+// ─────────────────────────────────────────────────────────────────
+// This is a TEMPLATE. The real firebase_options.dart is gitignored.
 //
-// HOW TO SET UP:
+// HOW TO GENERATE YOUR OWN:
 //   1. Create a Firebase project at https://console.firebase.google.com
-//   2. Install FlutterFire CLI:
+//   2. Enable Authentication (Email/Password)
+//   3. Enable Cloud Firestore
+//   4. Install FlutterFire CLI:
 //        dart pub global activate flutterfire_cli
-//   3. Run from the project root:
+//   5. Run from your project root:
 //        flutterfire configure
-//      This will auto-generate lib/firebase_options.dart with your real keys.
-//
-//   Alternatively, copy this file to lib/firebase_options.dart and replace
-//   every 'YOUR_*_HERE' placeholder with your actual Firebase project values.
-// ──────────────────────────────────────────────────────────────────────────
+//   This auto-generates lib/firebase_options.dart with your real keys.
+// ─────────────────────────────────────────────────────────────────
 
 // ignore_for_file: type=lint
 import 'package:firebase_core/firebase_core.dart' show FirebaseOptions;
@@ -23,56 +21,42 @@ import 'package:flutter/foundation.dart'
 
 class DefaultFirebaseOptions {
   static FirebaseOptions get currentPlatform {
-    if (kIsWeb) {
-      return web;
-    }
-
+    if (kIsWeb) return web;
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
         return android;
       case TargetPlatform.iOS:
-        throw UnsupportedError('FirebaseOptions are not configured for iOS.');
+        throw UnsupportedError('Not configured for iOS.');
       case TargetPlatform.macOS:
         return macos;
-      case TargetPlatform.windows:
-        throw UnsupportedError(
-          'FirebaseOptions are not configured for Windows.',
-        );
-      case TargetPlatform.linux:
-        throw UnsupportedError('FirebaseOptions are not configured for Linux.');
       default:
-        throw UnsupportedError(
-          'FirebaseOptions are not supported for this platform.',
-        );
+        throw UnsupportedError('Not configured for this platform.');
     }
   }
 
-  /// 🔵 WEB Firebase config
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'YOUR_WEB_API_KEY_HERE',
+    apiKey: 'YOUR_WEB_API_KEY',
     authDomain: 'YOUR_PROJECT_ID.firebaseapp.com',
-    projectId: 'YOUR_PROJECT_ID_HERE',
+    projectId: 'YOUR_PROJECT_ID',
     storageBucket: 'YOUR_PROJECT_ID.firebasestorage.app',
-    messagingSenderId: 'YOUR_MESSAGING_SENDER_ID_HERE',
-    appId: 'YOUR_WEB_APP_ID_HERE',
-    measurementId: 'YOUR_MEASUREMENT_ID_HERE',
+    messagingSenderId: 'YOUR_MESSAGING_SENDER_ID',
+    appId: 'YOUR_WEB_APP_ID',
+    measurementId: 'YOUR_MEASUREMENT_ID',
   );
 
-  /// 🤖 ANDROID Firebase config
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'YOUR_ANDROID_API_KEY_HERE',
-    appId: 'YOUR_ANDROID_APP_ID_HERE',
-    messagingSenderId: 'YOUR_MESSAGING_SENDER_ID_HERE',
-    projectId: 'YOUR_PROJECT_ID_HERE',
+    apiKey: 'YOUR_ANDROID_API_KEY',
+    appId: 'YOUR_ANDROID_APP_ID',
+    messagingSenderId: 'YOUR_MESSAGING_SENDER_ID',
+    projectId: 'YOUR_PROJECT_ID',
     storageBucket: 'YOUR_PROJECT_ID.firebasestorage.app',
   );
 
-  /// 🍎 macOS Firebase config
   static const FirebaseOptions macos = FirebaseOptions(
-    apiKey: 'YOUR_MACOS_API_KEY_HERE',
-    appId: 'YOUR_MACOS_APP_ID_HERE',
-    messagingSenderId: 'YOUR_MESSAGING_SENDER_ID_HERE',
-    projectId: 'YOUR_PROJECT_ID_HERE',
+    apiKey: 'YOUR_MACOS_API_KEY',
+    appId: 'YOUR_MACOS_APP_ID',
+    messagingSenderId: 'YOUR_MESSAGING_SENDER_ID',
+    projectId: 'YOUR_PROJECT_ID',
     storageBucket: 'YOUR_PROJECT_ID.firebasestorage.app',
   );
 }

@@ -4,6 +4,49 @@ Step-by-step guide to set up the SmartStay project on your local machine.
 
 ---
 
+## ⚠️ Important — If You Forked This Project
+
+The original `firebase_options.dart` has been rotated and is no longer valid. You **MUST** generate your own:
+
+### Step 1 — Create your own Firebase project
+
+Go to [console.firebase.google.com](https://console.firebase.google.com) → Click **Add Project**
+
+### Step 2 — Generate your config
+
+```bash
+flutterfire configure --project=YOUR_PROJECT_ID
+```
+
+This creates `lib/firebase_options.dart` for your project only.
+
+### Step 3 — Configure PayU
+
+```bash
+cp lib/config/env.dart.example lib/config/env.dart
+```
+
+Fill in your own PayU merchant key and salt.
+
+### Step 4 — Deploy rules
+
+```bash
+firebase deploy --only firestore:rules
+firebase deploy --only firestore:indexes
+```
+
+### These files are gitignored and unique to each developer:
+
+| File | Purpose |
+|------|---------|
+| `lib/firebase_options.dart` | Firebase API keys |
+| `lib/config/env.dart` | PayU credentials |
+| `.firebaserc` | Firebase project binding |
+| `firebase.json` | Firebase CLI config |
+| `android/app/google-services.json` | Android Firebase config |
+
+---
+
 ## 📋 Prerequisites
 
 | Tool | Install Command |
