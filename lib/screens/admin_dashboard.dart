@@ -425,10 +425,10 @@ class _RecentActivityCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AdminColors.card(context),
         borderRadius: BorderRadius.circular(20),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 20, offset: const Offset(0, 8))],
-        border: Border.all(color: const Color(0xFFF1F5F9)),
+        boxShadow: AdminShadows.card,
+        border: Border.all(color: AdminColors.border(context)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -542,7 +542,10 @@ class _ActivityStream extends StatelessWidget {
                 );
               }
 
-              return Column(children: display.map((item) => _ActivityTile(item: item)).toList());
+              return ScrollableCardContent(
+                maxHeight: 280,
+                child: Column(children: display.map((item) => _ActivityTile(item: item)).toList()),
+              );
             },
           ),
         ),
@@ -614,10 +617,10 @@ class _UpcomingFeeDuesCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AdminColors.card(context),
         borderRadius: BorderRadius.circular(20),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 20, offset: const Offset(0, 8))],
-        border: Border.all(color: const Color(0xFFF1F5F9)),
+        boxShadow: AdminShadows.card,
+        border: Border.all(color: AdminColors.border(context)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -782,7 +785,10 @@ class _FeeDuesListState extends State<_FeeDuesList> {
           );
         }
 
-        return Column(children: _resolvedItems.map((item) => _FeeDueTile(item: item)).toList());
+        return ScrollableCardContent(
+          maxHeight: 250,
+          child: Column(children: _resolvedItems.map((item) => _FeeDueTile(item: item)).toList()),
+        );
       },
     );
   }
@@ -811,12 +817,15 @@ class _FeeDueTile extends StatelessWidget {
       badgeBg = const Color(0xFFFFF7ED);
     } else {
       badgeColor = const Color(0xFF64748B);
-      badgeBg = const Color(0xFFF1F5F9);
+      badgeBg = Theme.of(context).brightness == Brightness.dark 
+          ? const Color(0xFF1E2130) : const Color(0xFFF1F5F9);
     }
 
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 14),
-      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFFF1F5F9)))),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: AdminColors.border(context))),
+      ),
       child: Row(
         children: [
           Expanded(
@@ -931,10 +940,10 @@ class _ResidentPaymentsCardState extends State<_ResidentPaymentsCard> {
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AdminColors.card(context),
         borderRadius: BorderRadius.circular(20),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 20, offset: const Offset(0, 8))],
-        border: Border.all(color: const Color(0xFFF1F5F9)),
+        boxShadow: AdminShadows.card,
+        border: Border.all(color: AdminColors.border(context)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -967,7 +976,7 @@ class _ResidentPaymentsCardState extends State<_ResidentPaymentsCard> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: BoxDecoration(
-              color: const Color(0xFFF8FAFC),
+              color: AdminColors.subtleBg(context),
               borderRadius: BorderRadius.circular(8),
             ),
             child: const Row(
@@ -1027,7 +1036,9 @@ class _ResidentPaymentsCardState extends State<_ResidentPaymentsCard> {
                 );
               }
 
-              return Column(
+              return ScrollableCardContent(
+                maxHeight: 300,
+                child: Column(
                 children: docs.take(15).map((doc) {
                   final d = doc.data() as Map<String, dynamic>;
                   final residentId = d['residentId']?.toString() ?? '';
@@ -1109,6 +1120,7 @@ class _ResidentPaymentsCardState extends State<_ResidentPaymentsCard> {
                     },
                   );
                 }).toList(),
+              ),
               );
             },
           ),
@@ -1130,10 +1142,10 @@ class _ComplaintsCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AdminColors.card(context),
         borderRadius: BorderRadius.circular(20),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 20, offset: const Offset(0, 8))],
-        border: Border.all(color: const Color(0xFFF1F5F9)),
+        boxShadow: AdminShadows.card,
+        border: Border.all(color: AdminColors.border(context)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1243,7 +1255,9 @@ class _ComplaintsCard extends StatelessWidget {
                   ),
                 );
               }
-              return Column(
+              return ScrollableCardContent(
+                maxHeight: 280,
+                child: Column(
                 children: docs.map((doc) {
                   final data = doc.data() as Map<String, dynamic>;
                   return _ComplaintTile(
@@ -1251,6 +1265,7 @@ class _ComplaintsCard extends StatelessWidget {
                     data: data,
                   );
                 }).toList(),
+              ),
               );
             },
           ),
@@ -1325,8 +1340,8 @@ class _ComplaintTile extends StatelessWidget {
       borderRadius: BorderRadius.circular(12),
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 4),
-        decoration: const BoxDecoration(
-          border: Border(bottom: BorderSide(color: Color(0xFFF1F5F9))),
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: AdminColors.border(context))),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1635,9 +1650,10 @@ void _showComplaintDetail(BuildContext context, String docId, Map<String, dynami
                       Container(
                         padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF8FAFC),
+                          color: Theme.of(context).brightness == Brightness.dark 
+                              ? const Color(0xFF1E2130) : const Color(0xFFF8FAFC),
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFFF1F5F9)),
+                          border: Border.all(color: AdminColors.border(context)),
                         ),
                         child: Row(
                           children: [
@@ -1667,9 +1683,10 @@ void _showComplaintDetail(BuildContext context, String docId, Map<String, dynami
                         width: double.infinity,
                         padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF8FAFC),
+                          color: Theme.of(context).brightness == Brightness.dark 
+                              ? const Color(0xFF1E2130) : const Color(0xFFF8FAFC),
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFFF1F5F9)),
+                          border: Border.all(color: AdminColors.border(context)),
                         ),
                         child: Text(
                           description,

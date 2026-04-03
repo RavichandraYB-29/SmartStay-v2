@@ -12,6 +12,8 @@ import 'rent_payments_screen.dart';
 import 'raise_complaint_screen.dart';
 import '../main.dart';
 import '../theme/app_text_styles.dart';
+import '../utils/admin_design_system.dart';
+import '../widgets/admin_widgets.dart';
 
 class ResidentDashboard extends StatefulWidget {
   const ResidentDashboard({super.key});
@@ -175,8 +177,8 @@ class _ResidentDashboardState extends State<ResidentDashboard> {
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      Theme.of(context).scaffoldBackgroundColor,
-                      const Color(0xFFF8FAFC),
+                      AdminColors.scaffold(context),
+                      AdminColors.scaffold(context),
                     ],
                   ),
                 ),
@@ -271,14 +273,8 @@ class _Header extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(24, 60, 24, 20),
       decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 15,
-            offset: const Offset(0, 5),
-          ),
-        ],
+        color: AdminColors.card(context),
+        boxShadow: AdminShadows.card,
       ),
       child: Row(
         children: [
@@ -308,21 +304,21 @@ class _Header extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text(
+                Text(
                   'SmartStay',
                   style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w800,
                     letterSpacing: -0.5,
-                    color: Color(0xFF1E293B),
+                    color: AdminColors.text(context),
                   ),
                 ),
                 Text(
                   'Resident Portal • $date',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w500,
-                    color: Color(0xFF64748B),
+                    color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
                   ),
                 ),
               ],
@@ -702,16 +698,10 @@ class _RoomDetailsCard extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AdminColors.card(context),
         borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
-          ),
-        ],
-        border: Border.all(color: const Color(0xFFF1F5F9)),
+        boxShadow: AdminShadows.card,
+        border: Border.all(color: AdminColors.border(context)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -861,9 +851,9 @@ class _RoomDetailsCard extends StatelessWidget {
                           margin: const EdgeInsets.only(bottom: 8),
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFF8FAFC),
+                            color: AdminColors.subtleBg(context),
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: const Color(0xFFF1F5F9)),
+                            border: Border.all(color: AdminColors.border(context)),
                           ),
                           child: Row(
                             children: [
@@ -988,16 +978,10 @@ class _QuickStatsCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AdminColors.card(context),
         borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
-          ),
-        ],
-        border: Border.all(color: const Color(0xFFF1F5F9)),
+        boxShadow: AdminShadows.card,
+        border: Border.all(color: AdminColors.border(context)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -1637,7 +1621,10 @@ class _PaymentSection extends StatelessWidget {
                         ),
                       )
                     else
-                      ...allPayments.take(5).map((doc) {
+                      ScrollableCardContent(
+                        maxHeight: 280,
+                        child: Column(
+                          children: allPayments.take(5).map((doc) {
                         final data = doc.data() as Map<String, dynamic>;
                         final amt = data['amount'] ?? data['monthlyFee'] ?? 0;
                         final paid = data['paidAt'] as Timestamp?;
@@ -1661,10 +1648,10 @@ class _PaymentSection extends StatelessWidget {
                             horizontal: 20,
                             vertical: 18,
                           ),
-                          decoration: const BoxDecoration(
+                          decoration: BoxDecoration(
                             border: Border(
                               bottom: BorderSide(
-                                color: Color(0xFFF1F5F9),
+                                color: AdminColors.border(context),
                                 width: 1,
                               ),
                             ),
@@ -1748,7 +1735,9 @@ class _PaymentSection extends StatelessWidget {
                             ],
                           ),
                         );
-                      }),
+                      }).toList(),
+                        ),
+                      ),
                   ],
                 );
               },
@@ -2311,12 +2300,10 @@ class _ComplaintsCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AdminColors.card(context),
         borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 20, offset: const Offset(0, 10)),
-        ],
-        border: Border.all(color: const Color(0xFFF1F5F9)),
+        boxShadow: AdminShadows.card,
+        border: Border.all(color: AdminColors.border(context)),
       ),
       child: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance
@@ -2399,7 +2386,9 @@ class _ComplaintsCard extends StatelessWidget {
                     ),
                   )
                 else
-                  Column(
+                  ScrollableCardContent(
+                    maxHeight: 280,
+                    child: Column(
                     children: activeDocs.map((doc) {
                       final data = doc.data() as Map<String, dynamic>;
                       final title = (data['title'] ?? 'Untitled').toString();
@@ -2412,9 +2401,9 @@ class _ComplaintsCard extends StatelessWidget {
                         margin: const EdgeInsets.only(bottom: 12),
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF8FAFC),
+                          color: AdminColors.subtleBg(context),
                           borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: const Color(0xFFF1F5F9)),
+                          border: Border.all(color: AdminColors.border(context)),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -2479,6 +2468,7 @@ class _ComplaintsCard extends StatelessWidget {
                         ),
                       );
                     }).toList(),
+                    ),
                   ),
               ],
             ),
@@ -2591,16 +2581,10 @@ class _NoticesPreviewCard extends StatelessWidget {
     }
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AdminColors.card(context),
         borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
-          ),
-        ],
-        border: Border.all(color: const Color(0xFFF1F5F9)),
+        boxShadow: AdminShadows.card,
+        border: Border.all(color: AdminColors.border(context)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -2704,7 +2688,9 @@ class _NoticesPreviewCard extends StatelessWidget {
                               return _NoticesEmptyCard();
                             }
 
-                            return Column(
+                            return ScrollableCardContent(
+                              maxHeight: 280,
+                              child: Column(
                               children: merged.map((doc) {
                                 final data = doc.data() as Map<String, dynamic>;
                                 final title = (data['title'] ?? 'Notice')
@@ -2736,12 +2722,12 @@ class _NoticesPreviewCard extends StatelessWidget {
                                       padding: const EdgeInsets.all(16),
                                       decoration: BoxDecoration(
                                         color: isRead
-                                            ? const Color(0xFFF8FAFC)
-                                            : Colors.white,
+                                            ? AdminColors.subtleBg(context)
+                                            : AdminColors.scaffold(context),
                                         borderRadius: BorderRadius.circular(20),
                                         border: Border.all(
                                           color: isRead
-                                              ? const Color(0xFFF1F5F9)
+                                              ? AdminColors.border(context)
                                               : const Color(0xFF6366F1)
                                                   .withOpacity(0.1),
                                         ),
@@ -2755,7 +2741,7 @@ class _NoticesPreviewCard extends StatelessWidget {
                                                   offset: const Offset(0, 4),
                                                 ),
                                               ],
-                                            ),
+                                      ),
                                       child: Row(
                                         crossAxisAlignment:
                                             CrossAxisAlignment.start,
@@ -2872,6 +2858,7 @@ class _NoticesPreviewCard extends StatelessWidget {
                                    ),
                                  );
                                }).toList(),
+                             ),
                              );
                            },
                          );

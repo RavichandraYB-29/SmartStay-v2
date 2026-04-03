@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SmartStay — Entity Relationship Diagram</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0B0F19;
+      --surface: #141825;
+      --surface-hover: #1A1F2E;
+      --border: #1E2538;
+      --border-bright: #2A3350;
+      --text: #E2E8F0;
+      --text-muted: #64748B;
+      --text-dim: #475569;
+      --primary: #818CF8;
+      --primary-dim: rgba(129, 140, 248, 0.15);
+      --teal: #2DD4BF;
+      --teal-dim: rgba(45, 212, 191, 0.15);
+      --pink: #F472B6;
+      --pink-dim: rgba(244, 114, 182, 0.15);
+      --amber: #FBBF24;
+      --amber-dim: rgba(251, 191, 36, 0.15);
+      --blue: #60A5FA;
+      --blue-dim: rgba(96, 165, 250, 0.15);
+      --green: #34D399;
+      --green-dim: rgba(52, 211, 153, 0.15);
+      --red: #F87171;
+      --red-dim: rgba(248, 113, 113, 0.15);
+      --purple: #A78BFA;
+      --purple-dim: rgba(167, 139, 250, 0.15);
+      --orange: #FB923C;
+      --orange-dim: rgba(251, 146, 60, 0.15);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    /* ── Header ── */
+    .header {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 28px;
+      background: rgba(11, 15, 25, 0.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+    }
+    .header-left { display: flex; align-items: center; gap: 14px; }
+    .header-logo {
+      width: 38px; height: 38px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--primary), #6366F1);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; font-weight: 900; color: #fff;
+    }
+    .header-title { font-size: 18px; font-weight: 800; letter-spacing: -0.5px; }
+    .header-subtitle { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+    .header-right { display: flex; align-items: center; gap: 10px; }
+    .badge {
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+    }
+    .badge-primary { background: var(--primary-dim); color: var(--primary); }
+    .badge-teal { background: var(--teal-dim); color: var(--teal); }
+
+    /* ── Canvas ── */
+    #canvas-container {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      overflow: hidden;
+      cursor: grab;
+    }
+    #canvas-container:active { cursor: grabbing; }
+    #canvas {
+      position: absolute;
+      transform-origin: 0 0;
+    }
+
+    /* ── Entity cards ── */
+    .entity {
+      position: absolute;
+      min-width: 240px;
+      border-radius: 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.3), 0 1px 3px rgba(0,0,0,0.2);
+      transition: box-shadow 0.25s, border-color 0.25s, transform 0.25s;
+      overflow: hidden;
+    }
+    .entity:hover {
+      border-color: var(--border-bright);
+      box-shadow: 0 8px 40px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.3);
+      transform: translateY(-2px);
+      z-index: 50;
+    }
+    .entity-header {
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .entity-icon {
+      width: 32px; height: 32px;
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px;
+    }
+    .entity-name {
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: -0.3px;
+      text-transform: uppercase;
+    }
+    .entity-type-badge {
+      margin-left: auto;
+      font-size: 9px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 4px;
+      letter-spacing: 0.5px;
+    }
+    .entity-body { padding: 10px 0; }
+    .attr {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 16px;
+      font-size: 12px;
+      transition: background 0.15s;
+    }
+    .attr:hover { background: var(--surface-hover); }
+    .attr-key {
+      font-size: 9px;
+      font-weight: 800;
+      padding: 1px 5px;
+      border-radius: 3px;
+      letter-spacing: 0.5px;
+      flex-shrink: 0;
+    }
+    .attr-pk { background: var(--amber-dim); color: var(--amber); }
+    .attr-fk { background: var(--blue-dim); color: var(--blue); }
+    .attr-field { background: var(--border); color: var(--text-muted); }
+    .attr-name { font-weight: 600; color: var(--text); }
+    .attr-type { margin-left: auto; font-size: 11px; color: var(--text-dim); font-weight: 500; }
+    .attr-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 6px 16px;
+    }
+
+    /* ── SVG relationships ── */
+    svg.relationships {
+      position: absolute;
+      top: 0; left: 0;
+      pointer-events: none;
+      overflow: visible;
+    }
+    svg.relationships path {
+      fill: none;
+      stroke-width: 1.5;
+      opacity: 0.5;
+      transition: opacity 0.3s;
+    }
+    svg.relationships text {
+      font-family: 'Inter', sans-serif;
+      font-size: 10px;
+      font-weight: 700;
+      fill: var(--text-muted);
+    }
+
+    /* ── Legend ── */
+    .legend {
+      position: fixed;
+      bottom: 20px; left: 20px;
+      z-index: 100;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px 20px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+      max-width: 300px;
+    }
+    .legend-title {
+      font-size: 11px;
+      font-weight: 800;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 10px;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+    .legend-line {
+      width: 28px; height: 2px; border-radius: 1px; flex-shrink: 0;
+    }
+    .legend-dot {
+      width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0;
+    }
+
+    /* ── Controls ── */
+    .controls {
+      position: fixed;
+      bottom: 20px; right: 20px;
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .ctrl-btn {
+      width: 40px; height: 40px;
+      border-radius: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      font-size: 18px;
+      font-weight: 700;
+      transition: all 0.2s;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    }
+    .ctrl-btn:hover {
+      background: var(--surface-hover);
+      border-color: var(--border-bright);
+    }
+
+    /* ── Tooltip ── */
+    .tooltip {
+      position: fixed;
+      z-index: 200;
+      background: var(--surface);
+      border: 1px solid var(--border-bright);
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 12px;
+      color: var(--text);
+      box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s;
+      max-width: 260px;
+    }
+    .tooltip.visible { opacity: 1; }
+    .tooltip-title { font-weight: 700; margin-bottom: 4px; }
+    .tooltip-desc { color: var(--text-muted); font-size: 11px; line-height: 1.5; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <div class="header-logo">S</div>
+    <div>
+      <div class="header-title">SmartStay — ER Diagram</div>
+      <div class="header-subtitle">Firestore Database Schema · 9 Collections · All Relationships</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <span class="badge badge-teal">Firebase / Firestore</span>
+    <span class="badge badge-primary">Flutter App</span>
+  </div>
+</div>
+
+<div id="canvas-container">
+  <div id="canvas">
+    <svg class="relationships" id="svg-rels" width="4000" height="3000"></svg>
+    <!-- Entities will be injected here -->
+  </div>
+</div>
+
+<div class="legend">
+  <div class="legend-title">Legend</div>
+  <div class="legend-item"><div class="legend-dot" style="background: var(--amber);"></div> PK — Primary Key (doc ID)</div>
+  <div class="legend-item"><div class="legend-dot" style="background: var(--blue);"></div> FK — Foreign Key</div>
+  <div class="legend-item"><div class="legend-line" style="background: var(--primary);"></div> 1 : N — One to Many</div>
+  <div class="legend-item"><div class="legend-line" style="background: var(--teal);"></div> Subcollection (nested)</div>
+  <div class="legend-item"><div class="legend-line" style="background: var(--pink); border-top: 2px dashed var(--pink); height: 0;"></div> M : N — Many to Many</div>
+</div>
+
+<div class="controls">
+  <button class="ctrl-btn" id="zoom-in" title="Zoom In">+</button>
+  <button class="ctrl-btn" id="zoom-out" title="Zoom Out">−</button>
+  <button class="ctrl-btn" id="zoom-fit" title="Fit to View" style="font-size: 14px;">⊡</button>
+</div>
+
+<div class="tooltip" id="tooltip">
+  <div class="tooltip-title" id="tooltip-title"></div>
+  <div class="tooltip-desc" id="tooltip-desc"></div>
+</div>
+
+<script>
+// ── Entity Definitions ──
+const entities = [
+  {
+    id: 'users',
+    name: 'Users',
+    icon: '👤',
+    color: 'var(--primary)',
+    colorDim: 'var(--primary-dim)',
+    x: 120, y: 120,
+    desc: 'Firebase Auth users (admins). Stores role and profile. Keyed by Firebase Auth UID.',
+    attrs: [
+      { name: 'uid', type: 'string', key: 'PK' },
+      { name: 'name', type: 'string' },
+      { name: 'email', type: 'string' },
+      { name: 'phone', type: 'string' },
+      { name: 'role', type: '"admin"' },
+      { name: 'themeMode', type: 'string' },
+      { name: 'createdAt', type: 'timestamp' },
+    ]
+  },
+  {
+    id: 'residents',
+    name: 'Residents',
+    icon: '🏠',
+    color: 'var(--teal)',
+    colorDim: 'var(--teal-dim)',
+    x: 570, y: 80,
+    desc: 'Resident profiles created by admins. Linked to auth via authUid. Stores allocation details.',
+    attrs: [
+      { name: 'docId', type: 'string', key: 'PK' },
+      { name: 'authUid', type: 'string', key: 'FK' },
+      { name: 'adminId', type: 'string', key: 'FK' },
+      { divider: true },
+      { name: 'name / fullName', type: 'string' },
+      { name: 'email', type: 'string' },
+      { name: 'phone', type: 'string' },
+      { name: 'role', type: '"resident"' },
+      { name: 'status', type: 'string' },
+      { name: 'isEmailVerified', type: 'bool' },
+      { divider: true },
+      { name: 'isAllocated', type: 'bool' },
+      { name: 'allocationStatus', type: 'string' },
+      { name: 'hostelId', type: 'string', key: 'FK' },
+      { name: 'pgId', type: 'string', key: 'FK' },
+      { name: 'floorId', type: 'string', key: 'FK' },
+      { name: 'roomId', type: 'string', key: 'FK' },
+      { name: 'bedId', type: 'string', key: 'FK' },
+      { name: 'allocationDetails', type: 'map' },
+      { name: 'allocatedAt', type: 'timestamp' },
+      { name: 'createdAt', type: 'timestamp' },
+    ]
+  },
+  {
+    id: 'hostels',
+    name: 'Hostels',
+    icon: '🏢',
+    color: 'var(--purple)',
+    colorDim: 'var(--purple-dim)',
+    x: 120, y: 580,
+    desc: 'Top-level hostel/PG property. Owned by an admin. Contains sub-collections for PGs.',
+    attrs: [
+      { name: 'docId', type: 'string', key: 'PK' },
+      { name: 'ownerId / adminId', type: 'string', key: 'FK' },
+      { divider: true },
+      { name: 'name / hostelName', type: 'string' },
+      { name: 'hostelType', type: 'string' },
+      { name: 'description', type: 'string' },
+      { name: 'street / city / state', type: 'string' },
+      { name: 'pincode', type: 'string' },
+      { name: 'address', type: 'string' },
+      { name: 'floors', type: 'int' },
+      { name: 'isActive', type: 'bool' },
+      { name: 'totalRooms', type: 'int' },
+      { name: 'totalBeds', type: 'int' },
+      { name: 'availableBeds', type: 'int' },
+      { name: 'createdAt', type: 'timestamp' },
+    ]
+  },
+  {
+    id: 'pgs',
+    name: 'PGs',
+    icon: '🏘️',
+    color: 'var(--blue)',
+    colorDim: 'var(--blue-dim)',
+    x: 520, y: 650,
+    desc: 'Sub-collection of Hostels. Represents a PG unit within a hostel. Path: hostels/{id}/pgs/{id}',
+    attrs: [
+      { name: 'docId', type: 'string', key: 'PK' },
+      { name: 'hostelId', type: 'string', key: 'FK' },
+      { name: 'adminId / ownerId', type: 'string', key: 'FK' },
+      { divider: true },
+      { name: 'name / pgName', type: 'string' },
+      { name: 'floors', type: 'int' },
+      { name: 'totalBeds', type: 'int' },
+      { name: 'availableBeds', type: 'int' },
+      { name: 'createdAt', type: 'timestamp' },
+    ]
+  },
+  {
+    id: 'floors',
+    name: 'Floors',
+    icon: '🏗️',
+    color: 'var(--orange)',
+    colorDim: 'var(--orange-dim)',
+    x: 880, y: 580,
+    desc: 'Sub-collection of PGs. Path: hostels/{id}/pgs/{id}/floors/{id}',
+    attrs: [
+      { name: 'docId', type: 'string', key: 'PK' },
+      { name: 'hostelId', type: 'string', key: 'FK' },
+      { name: 'pgId', type: 'string', key: 'FK' },
+      { name: 'adminId', type: 'string', key: 'FK' },
+      { divider: true },
+      { name: 'floorName', type: 'string' },
+      { name: 'floorIndex', type: 'int' },
+      { name: 'totalRooms', type: 'int' },
+      { name: 'totalBeds', type: 'int' },
+      { name: 'availableBeds', type: 'int' },
+      { name: 'createdAt', type: 'timestamp' },
+    ]
+  },
+  {
+    id: 'rooms',
+    name: 'Rooms',
+    icon: '🚪',
+    color: 'var(--pink)',
+    colorDim: 'var(--pink-dim)',
+    x: 1230, y: 480,
+    desc: 'Sub-collection of Floors. Path: hostels/{id}/pgs/{id}/floors/{id}/rooms/{id}',
+    attrs: [
+      { name: 'docId', type: 'string', key: 'PK' },
+      { name: 'hostelId', type: 'string', key: 'FK' },
+      { name: 'pgId', type: 'string', key: 'FK' },
+      { name: 'floorId', type: 'string', key: 'FK' },
+      { name: 'adminId', type: 'string', key: 'FK' },
+      { divider: true },
+      { name: 'roomNumber', type: 'string' },
+      { name: 'name', type: 'string' },
+      { name: 'sharingType', type: 'string' },
+      { name: 'totalBeds', type: 'int' },
+      { name: 'occupiedBeds', type: 'int' },
+      { name: 'availableBeds', type: 'int' },
+      { name: 'rentPerBed', type: 'int' },
+      { name: 'amenities', type: 'array<string>' },
+      { name: 'createdAt', type: 'timestamp' },
+    ]
+  },
+  {
+    id: 'beds',
+    name: 'Beds',
+    icon: '🛏️',
+    color: 'var(--green)',
+    colorDim: 'var(--green-dim)',
+    x: 1230, y: 120,
+    desc: 'Sub-collection of Rooms. Path: hostels/.../rooms/{id}/beds/{id}. Tracks occupancy.',
+    attrs: [
+      { name: 'docId (B1, B2…)', type: 'string', key: 'PK' },
+      { name: 'residentId', type: 'string', key: 'FK' },
+      { divider: true },
+      { name: 'bedNumber', type: 'string' },
+      { name: 'isOccupied', type: 'bool' },
+      { name: 'occupiedBy', type: 'string' },
+    ]
+  },
+  {
+    id: 'payments',
+    name: 'Payments',
+    icon: '💳',
+    color: 'var(--amber)',
+    colorDim: 'var(--amber-dim)',
+    x: 1570, y: 80,
+    desc: 'Top-level collection. Records rent payment transactions via PayU gateway. One per month per resident.',
+    attrs: [
+      { name: 'docId', type: 'string', key: 'PK' },
+      { name: 'residentId', type: 'string', key: 'FK' },
+      { name: 'adminId', type: 'string', key: 'FK' },
+      { name: 'userId', type: 'string', key: 'FK' },
+      { divider: true },
+      { name: 'residentName', type: 'string' },
+      { name: 'amount', type: 'int' },
+      { name: 'status', type: '"paid"' },
+      { name: 'isPaid', type: 'bool' },
+      { name: 'month', type: 'string' },
+      { name: 'dueDate', type: 'timestamp' },
+      { name: 'paidAt', type: 'timestamp' },
+      { name: 'paymentGateway', type: '"payu"' },
+      { name: 'payuTxnId', type: 'string' },
+      { name: 'paymentMode', type: 'string' },
+      { name: 'hostelId', type: 'string', key: 'FK' },
+      { name: 'pgId', type: 'string', key: 'FK' },
+      { name: 'floorId', type: 'string', key: 'FK' },
+      { name: 'roomId', type: 'string', key: 'FK' },
+      { name: 'bedId', type: 'string', key: 'FK' },
+    ]
+  },
+  {
+    id: 'complaints',
+    name: 'Complaints',
+    icon: '⚠️',
+    color: 'var(--red)',
+    colorDim: 'var(--red-dim)',
+    x: 1570, y: 550,
+    desc: 'Top-level collection. Resident-raised complaints with category, priority, and admin-managed status.',
+    attrs: [
+      { name: 'docId', type: 'string', key: 'PK' },
+      { name: 'residentId', type: 'string', key: 'FK' },
+      { name: 'adminId', type: 'string', key: 'FK' },
+      { divider: true },
+      { name: 'residentName', type: 'string' },
+      { name: 'title', type: 'string' },
+      { name: 'category', type: 'string' },
+      { name: 'priority', type: 'string' },
+      { name: 'description', type: 'string' },
+      { name: 'status', type: 'string' },
+      { name: 'hostelId / hostelName', type: 'string' },
+      { name: 'floorId / floorLabel', type: 'string' },
+      { name: 'roomId / roomNumber', type: 'string' },
+      { name: 'pgId', type: 'string' },
+      { name: 'createdAt', type: 'timestamp' },
+      { name: 'updatedAt', type: 'timestamp' },
+    ]
+  },
+  {
+    id: 'notices',
+    name: 'Notices',
+    icon: '📢',
+    color: 'var(--primary)',
+    colorDim: 'var(--primary-dim)',
+    x: 120, y: 1060,
+    desc: 'Top-level collection. Admin-published notices with scoped audience (ALL, PG, or RESIDENT).',
+    attrs: [
+      { name: 'noticeId', type: 'string', key: 'PK' },
+      { name: 'createdByAdminId', type: 'string', key: 'FK' },
+      { name: 'hostelOwnerId', type: 'string', key: 'FK' },
+      { divider: true },
+      { name: 'title', type: 'string' },
+      { name: 'message', type: 'string' },
+      { name: 'noticeType', type: 'string' },
+      { name: 'scope', type: 'ALL|PG|RESIDENT' },
+      { name: 'senderRole', type: '"admin"' },
+      { name: 'pgIds', type: 'array<string>' },
+      { name: 'residentIds', type: 'array<string>' },
+      { name: 'isActive', type: 'bool' },
+      { name: 'createdAt', type: 'timestamp' },
+    ]
+  },
+  {
+    id: 'readStatus',
+    name: 'Read Status',
+    icon: '✅',
+    color: 'var(--green)',
+    colorDim: 'var(--green-dim)',
+    x: 570, y: 1100,
+    desc: 'Sub-collection of Residents. Tracks which notices a resident has read. Path: residents/{id}/readStatus/{noticeId}',
+    attrs: [
+      { name: 'docId (= noticeId)', type: 'string', key: 'PK' },
+      { divider: true },
+      { name: 'readAt', type: 'timestamp' },
+    ]
+  },
+];
+
+// ── Relationships ──
+const relationships = [
+  // Admin owns hostels
+  { from: 'users', to: 'hostels', label: '1 : N', color: 'var(--purple)', desc: 'Admin owns Hostels', type: 'oneToMany' },
+  // Admin manages residents
+  { from: 'users', to: 'residents', label: '1 : N', color: 'var(--teal)', desc: 'Admin invites Residents', type: 'oneToMany' },
+  // Hostel contains PGs (subcollection)
+  { from: 'hostels', to: 'pgs', label: '1 : N', color: 'var(--teal)', desc: 'Hostel contains PGs (subcollection)', type: 'subcollection' },
+  // PG contains Floors (subcollection)
+  { from: 'pgs', to: 'floors', label: '1 : N', color: 'var(--teal)', desc: 'PG contains Floors (subcollection)', type: 'subcollection' },
+  // Floor contains Rooms (subcollection)
+  { from: 'floors', to: 'rooms', label: '1 : N', color: 'var(--teal)', desc: 'Floor contains Rooms (subcollection)', type: 'subcollection' },
+  // Room contains Beds (subcollection)
+  { from: 'rooms', to: 'beds', label: '1 : N', color: 'var(--teal)', desc: 'Room contains Beds (subcollection)', type: 'subcollection' },
+  // Bed occupied by Resident
+  { from: 'beds', to: 'residents', label: '1 : 1', color: 'var(--green)', desc: 'Bed occupied by Resident', type: 'oneToOne' },
+  // Resident has Payments
+  { from: 'residents', to: 'payments', label: '1 : N', color: 'var(--amber)', desc: 'Resident makes Payments', type: 'oneToMany' },
+  // Resident raises Complaints
+  { from: 'residents', to: 'complaints', label: '1 : N', color: 'var(--red)', desc: 'Resident raises Complaints', type: 'oneToMany' },
+  // Notices to PGs (M:N via array)
+  { from: 'notices', to: 'pgs', label: 'M : N', color: 'var(--pink)', desc: 'Notices scoped to PGs (pgIds array)', type: 'manyToMany' },
+  // Notices to Residents (M:N via array)
+  { from: 'notices', to: 'residents', label: 'M : N', color: 'var(--pink)', desc: 'Notices targeted at Residents (residentIds)', type: 'manyToMany' },
+  // Resident has ReadStatus (subcollection)
+  { from: 'residents', to: 'readStatus', label: '1 : N', color: 'var(--teal)', desc: 'Resident read status (subcollection)', type: 'subcollection' },
+  // Admin creates Notices
+  { from: 'users', to: 'notices', label: '1 : N', color: 'var(--primary)', desc: 'Admin publishes Notices', type: 'oneToMany' },
+];
+
+// ── Render ──
+const canvas = document.getElementById('canvas');
+const svgRels = document.getElementById('svg-rels');
+const container = document.getElementById('canvas-container');
+const tooltip = document.getElementById('tooltip');
+const tooltipTitle = document.getElementById('tooltip-title');
+const tooltipDesc = document.getElementById('tooltip-desc');
+
+// Create entity cards
+const entityElements = {};
+entities.forEach(entity => {
+  const el = document.createElement('div');
+  el.className = 'entity';
+  el.style.left = entity.x + 'px';
+  el.style.top = entity.y + 'px';
+  el.dataset.id = entity.id;
+
+  let attrsHtml = '';
+  entity.attrs.forEach(attr => {
+    if (attr.divider) {
+      attrsHtml += '<div class="attr-divider"></div>';
+      return;
+    }
+    const keyClass = attr.key === 'PK' ? 'attr-pk' : attr.key === 'FK' ? 'attr-fk' : 'attr-field';
+    const keyLabel = attr.key || '•';
+    attrsHtml += `
+      <div class="attr">
+        <span class="attr-key ${keyClass}">${keyLabel}</span>
+        <span class="attr-name">${attr.name}</span>
+        <span class="attr-type">${attr.type}</span>
+      </div>`;
+  });
+
+  const isSubcollection = ['pgs', 'floors', 'rooms', 'beds', 'readStatus'].includes(entity.id);
+
+  el.innerHTML = `
+    <div class="entity-header" style="background: ${entity.colorDim};">
+      <div class="entity-icon" style="background: ${entity.colorDim};">${entity.icon}</div>
+      <span class="entity-name" style="color: ${entity.color};">${entity.name}</span>
+      <span class="entity-type-badge" style="background: ${entity.colorDim}; color: ${entity.color};">
+        ${isSubcollection ? 'SUBCOL' : 'COLLECTION'}
+      </span>
+    </div>
+    <div class="entity-body">${attrsHtml}</div>`;
+
+  // Tooltip
+  el.addEventListener('mouseenter', (e) => {
+    tooltipTitle.textContent = entity.name;
+    tooltipDesc.textContent = entity.desc;
+    tooltip.classList.add('visible');
+  });
+  el.addEventListener('mousemove', (e) => {
+    tooltip.style.left = (e.clientX + 16) + 'px';
+    tooltip.style.top = (e.clientY + 10) + 'px';
+  });
+  el.addEventListener('mouseleave', () => {
+    tooltip.classList.remove('visible');
+  });
+
+  canvas.appendChild(el);
+  entityElements[entity.id] = el;
+});
+
+// Draw relationships
+function getCenter(entityId) {
+  const el = entityElements[entityId];
+  const x = parseInt(el.style.left) + el.offsetWidth / 2;
+  const y = parseInt(el.style.top) + el.offsetHeight / 2;
+  return { x, y };
+}
+
+function getEdgePoint(entityId, targetX, targetY) {
+  const el = entityElements[entityId];
+  const cx = parseInt(el.style.left) + el.offsetWidth / 2;
+  const cy = parseInt(el.style.top) + el.offsetHeight / 2;
+  const w = el.offsetWidth / 2;
+  const h = el.offsetHeight / 2;
+
+  const dx = targetX - cx;
+  const dy = targetY - cy;
+  const angle = Math.atan2(dy, dx);
+
+  // Check which edge the line crosses
+  const tanAngle = Math.abs(Math.tan(angle));
+  let edgeX, edgeY;
+
+  if (tanAngle * w <= h) {
+    // Hits left or right edge
+    edgeX = cx + (dx > 0 ? w : -w);
+    edgeY = cy + (dx > 0 ? w : -w) * Math.tan(angle);
+  } else {
+    // Hits top or bottom edge
+    edgeY = cy + (dy > 0 ? h : -h);
+    edgeX = cx + (dy > 0 ? h : -h) / Math.tan(angle);
+  }
+
+  return { x: edgeX, y: edgeY };
+}
+
+function drawRelationships() {
+  svgRels.innerHTML = '';
+
+  // Defs for markers
+  const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+  svgRels.appendChild(defs);
+
+  relationships.forEach((rel, idx) => {
+    const fromCenter = getCenter(rel.from);
+    const toCenter = getCenter(rel.to);
+    const fromPt = getEdgePoint(rel.from, toCenter.x, toCenter.y);
+    const toPt = getEdgePoint(rel.to, fromCenter.x, fromCenter.y);
+
+    // Calculate control points for curved lines
+    const midX = (fromPt.x + toPt.x) / 2;
+    const midY = (fromPt.y + toPt.y) / 2;
+    const dx = toPt.x - fromPt.x;
+    const dy = toPt.y - fromPt.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    const offset = Math.min(dist * 0.15, 40);
+
+    // Perpendicular offset for curve
+    const nx = -dy / dist * offset;
+    const ny = dx / dist * offset;
+
+    const cpX = midX + nx;
+    const cpY = midY + ny;
+
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    const d = `M ${fromPt.x} ${fromPt.y} Q ${cpX} ${cpY} ${toPt.x} ${toPt.y}`;
+    path.setAttribute('d', d);
+    path.setAttribute('stroke', rel.color);
+
+    if (rel.type === 'manyToMany') {
+      path.setAttribute('stroke-dasharray', '6 4');
+    } else if (rel.type === 'subcollection') {
+      path.setAttribute('stroke-width', '2');
+      path.setAttribute('opacity', '0.6');
+    }
+
+    svgRels.appendChild(path);
+
+    // Label
+    const labelX = cpX;
+    const labelY = cpY - 6;
+
+    const gLabel = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+    // Background rect for label
+    const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    bgRect.setAttribute('x', labelX - 18);
+    bgRect.setAttribute('y', labelY - 8);
+    bgRect.setAttribute('width', 36);
+    bgRect.setAttribute('height', 16);
+    bgRect.setAttribute('rx', 4);
+    bgRect.setAttribute('fill', 'var(--bg)');
+    bgRect.setAttribute('stroke', rel.color);
+    bgRect.setAttribute('stroke-width', '0.5');
+    bgRect.setAttribute('opacity', '0.9');
+    gLabel.appendChild(bgRect);
+
+    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    text.setAttribute('x', labelX);
+    text.setAttribute('y', labelY + 4);
+    text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('fill', rel.color);
+    text.setAttribute('font-size', '9');
+    text.textContent = rel.label;
+    gLabel.appendChild(text);
+
+    svgRels.appendChild(gLabel);
+
+    // Endpoints — small dots
+    const circle1 = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle1.setAttribute('cx', fromPt.x);
+    circle1.setAttribute('cy', fromPt.y);
+    circle1.setAttribute('r', '3');
+    circle1.setAttribute('fill', rel.color);
+    circle1.setAttribute('opacity', '0.7');
+    svgRels.appendChild(circle1);
+
+    const circle2 = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle2.setAttribute('cx', toPt.x);
+    circle2.setAttribute('cy', toPt.y);
+    circle2.setAttribute('r', '3');
+    circle2.setAttribute('fill', rel.color);
+    circle2.setAttribute('opacity', '0.7');
+    svgRels.appendChild(circle2);
+  });
+}
+
+// Wait for layout then draw
+requestAnimationFrame(() => {
+  requestAnimationFrame(() => {
+    drawRelationships();
+    fitToView();
+  });
+});
+
+// ── Pan & Zoom ──
+let scale = 1;
+let panX = 0;
+let panY = 0;
+let isDragging = false;
+let startX, startY;
+
+function updateTransform() {
+  canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+}
+
+container.addEventListener('mousedown', (e) => {
+  if (e.target.closest('.entity')) return;
+  isDragging = true;
+  startX = e.clientX - panX;
+  startY = e.clientY - panY;
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!isDragging) return;
+  panX = e.clientX - startX;
+  panY = e.clientY - startY;
+  updateTransform();
+});
+
+window.addEventListener('mouseup', () => isDragging = false);
+
+container.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const delta = e.deltaY > 0 ? 0.92 : 1.08;
+  const newScale = Math.min(Math.max(scale * delta, 0.2), 3);
+
+  // Zoom toward cursor
+  const rect = container.getBoundingClientRect();
+  const mouseX = e.clientX - rect.left;
+  const mouseY = e.clientY - rect.top;
+
+  panX = mouseX - (mouseX - panX) * (newScale / scale);
+  panY = mouseY - (mouseY - panY) * (newScale / scale);
+  scale = newScale;
+  updateTransform();
+}, { passive: false });
+
+// Controls
+document.getElementById('zoom-in').addEventListener('click', () => {
+  scale = Math.min(scale * 1.2, 3);
+  updateTransform();
+});
+document.getElementById('zoom-out').addEventListener('click', () => {
+  scale = Math.max(scale * 0.8, 0.2);
+  updateTransform();
+});
+document.getElementById('zoom-fit').addEventListener('click', fitToView);
+
+function fitToView() {
+  const allEntities = document.querySelectorAll('.entity');
+  if (!allEntities.length) return;
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  allEntities.forEach(el => {
+    const x = parseInt(el.style.left);
+    const y = parseInt(el.style.top);
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x + el.offsetWidth);
+    maxY = Math.max(maxY, y + el.offsetHeight);
+  });
+
+  const contentW = maxX - minX + 100;
+  const contentH = maxY - minY + 100;
+  const viewW = container.clientWidth;
+  const viewH = container.clientHeight - 70; // header
+
+  scale = Math.min(viewW / contentW, viewH / contentH, 1) * 0.85;
+  panX = (viewW - contentW * scale) / 2 - minX * scale + 50;
+  panY = (viewH - contentH * scale) / 2 - minY * scale + 90;
+  updateTransform();
+}
+</script>
+</body>
+</html>

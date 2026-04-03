@@ -1259,3 +1259,116 @@ class OccupancyBar extends StatelessWidget {
     );
   }
 }
+
+// ─────────────────────────────────────────────
+// 14. Scrollable Card Content
+// ─────────────────────────────────────────────
+/// Wraps child content in a max-height scrollable area with a
+/// bottom fade gradient that hints at more content below.
+/// The fade hides automatically when content doesn't overflow
+/// or when the user scrolls to the bottom.
+class ScrollableCardContent extends StatefulWidget {
+  final Widget child;
+  final double maxHeight;
+
+  const ScrollableCardContent({
+    super.key,
+    required this.child,
+    this.maxHeight = 280,
+  });
+
+  @override
+  State<ScrollableCardContent> createState() => _ScrollableCardContentState();
+}
+
+class _ScrollableCardContentState extends State<ScrollableCardContent> {
+  final ScrollController _controller = ScrollController();
+  bool _showFade = false;
+  bool _hasCheckedOverflow = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(_onScroll);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkOverflow());
+  }
+
+  @override
+  void didUpdateWidget(covariant ScrollableCardContent oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Re-check overflow when child content changes
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkOverflow());
+  }
+
+  void _checkOverflow() {
+    if (!_controller.hasClients || !mounted) return;
+    final isOverflowing = _controller.position.maxScrollExtent > 0;
+    final atBottom = _controller.position.pixels >=
+        _controller.position.maxScrollExtent - 10;
+    final shouldShowFade = isOverflowing && !atBottom;
+    if (shouldShowFade != _showFade) {
+      setState(() => _showFade = shouldShowFade);
+    }
+    _hasCheckedOverflow = true;
+  }
+
+  void _onScroll() {
+    if (!_controller.hasClients || !mounted) return;
+    final atBottom = _controller.position.pixels >=
+        _controller.position.maxScrollExtent - 10;
+    final isOverflowing = _controller.position.maxScrollExtent > 0;
+    final shouldShowFade = isOverflowing && !atBottom;
+    if (shouldShowFade != _showFade) {
+      setState(() => _showFade = shouldShowFade);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_onScroll);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cardColor = AdminColors.card(context);
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: widget.maxHeight),
+      child: Stack(
+        children: [
+          SingleChildScrollView(
+            controller: _controller,
+            physics: const BouncingScrollPhysics(),
+            child: widget.child,
+          ),
+          // Bottom fade gradient
+          if (_showFade)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: 48,
+              child: IgnorePointer(
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        cardColor.withOpacity(0.0),
+                        cardColor.withOpacity(0.85),
+                        cardColor,
+                      ],
+                      stops: const [0.0, 0.65, 1.0],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}

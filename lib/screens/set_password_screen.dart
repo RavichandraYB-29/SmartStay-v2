@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../theme/app_text_styles.dart';
+import '../utils/admin_design_system.dart';
 import 'login_screen.dart';
 
 class SetPasswordScreen extends StatefulWidget {
@@ -156,15 +157,10 @@ class _SetPasswordScreenState extends State<SetPasswordScreen> {
           width: 420,
           padding: const EdgeInsets.all(24),
           decoration: BoxDecoration(
-            color: Theme.of(context).cardColor,
+            color: AdminColors.card(context),
             borderRadius: BorderRadius.circular(20),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.08),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
-              ),
-            ],
+            boxShadow: AdminShadows.card,
+            border: Border.all(color: AdminColors.border(context)),
           ),
           child: Form(
             key: _formKey,

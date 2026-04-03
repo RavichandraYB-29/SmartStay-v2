@@ -7,6 +7,7 @@ import '../widgets/custom_textfield.dart';
 import '../widgets/forgot_password_dialog.dart';
 import '../widgets/gradient_button.dart';
 import '../theme/app_text_styles.dart';
+import '../utils/admin_design_system.dart';
 
 import 'admin_dashboard.dart';
 import 'resident_dashboard.dart';
@@ -565,13 +566,11 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Widget _mainUI() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    
     return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFFEAF0FF), Colors.white],
-        ),
+      decoration: BoxDecoration(
+        color: AdminColors.scaffold(context),
       ),
       child: Center(
         child: SingleChildScrollView(
@@ -598,15 +597,10 @@ class _LoginScreenState extends State<LoginScreen> {
       width: 420,
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AdminColors.card(context),
         borderRadius: BorderRadius.circular(22),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 20,
-            offset: Offset(0, 10),
-          ),
-        ],
+        border: Border.all(color: AdminColors.border(context)),
+        boxShadow: AdminShadows.card,
       ),
       child: Column(
         children: [
@@ -631,6 +625,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Widget _tabItem(String text, bool loginTab) {
     final active = isLoginTab == loginTab;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Expanded(
       child: GestureDetector(
@@ -641,7 +636,9 @@ class _LoginScreenState extends State<LoginScreen> {
               text,
               style: AppTextStyles.bodyMedium.copyWith(
                 fontWeight: FontWeight.w600,
-                color: active ? const Color(0xFF6C3BFF) : Colors.grey,
+                color: active 
+                    ? const Color(0xFF6C3BFF) 
+                    : (isDark ? Colors.grey.shade500 : Colors.grey),
               ),
             ),
             const SizedBox(height: 6),
@@ -675,6 +672,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final color = role == 'resident'
         ? const Color(0xFF22B8A7)
         : const Color(0xFF6C3BFF);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Expanded(
       child: GestureDetector(
@@ -682,20 +680,34 @@ class _LoginScreenState extends State<LoginScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 12),
           decoration: BoxDecoration(
-            color: selected ? color.withOpacity(0.12) : Colors.white,
+            color: selected 
+                ? color.withOpacity(0.12) 
+                : AdminColors.card(context),
             borderRadius: BorderRadius.circular(30),
-            border: Border.all(color: selected ? color : Colors.grey.shade300),
+            border: Border.all(
+              color: selected 
+                  ? color 
+                  : (isDark ? const Color(0xFF2E3347) : Colors.grey.shade300),
+            ),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 18, color: selected ? color : Colors.grey),
+              Icon(
+                icon, 
+                size: 18, 
+                color: selected 
+                    ? color 
+                    : (isDark ? Colors.grey.shade400 : Colors.grey),
+              ),
               const SizedBox(width: 6),
               Text(
                 label,
                 style: AppTextStyles.bodyMedium.copyWith(
                   fontWeight: FontWeight.w600,
-                  color: selected ? color : Colors.grey,
+                  color: selected 
+                      ? color 
+                      : (isDark ? Colors.grey.shade400 : Colors.grey),
                 ),
               ),
             ],
@@ -736,7 +748,12 @@ class _LoginScreenState extends State<LoginScreen> {
               context: context,
               builder: (_) => const ForgotPasswordDialog(),
             ),
-            child: Text('Forgot password?', style: AppTextStyles.bodySmall),
+            child: Text(
+              'Forgot password?', 
+              style: AppTextStyles.bodySmall.copyWith(
+                color: AdminColors.primaryLight,
+              ),
+            ),
           ),
         ),
         GradientButton(
@@ -747,6 +764,10 @@ class _LoginScreenState extends State<LoginScreen> {
         const SizedBox(height: 16),
         OutlinedButton(
           onPressed: signInWithGoogle,
+          style: OutlinedButton.styleFrom(
+            side: BorderSide(color: AdminColors.border(context)),
+            foregroundColor: AdminColors.text(context),
+          ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [

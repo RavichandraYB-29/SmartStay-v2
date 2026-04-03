@@ -28,12 +28,23 @@ class AdminColors {
   static const scaffoldLight = Color(0xFFF4F6FB);
   static const scaffoldDark = Color(0xFF0F1117);
   static const cardLight = Colors.white;
+  static const cardDark = Color(0xFF1A1D24);
   static const cardBorder = Color(0xFFE8ECEF);
+  static const cardBorderDark = Color(0xFF2E3347);
 
   // Text
   static const textPrimary = Color(0xFF111827);
+  static const textPrimaryDark = Color(0xFFE5E7EB);
   static const textSecondary = Color(0xFF6B7280);
+  static const textSecondaryDark = Color(0xFF9CA3AF);
   static const textMuted = Color(0xFF9CA3AF);
+  static const textMutedDark = Color(0xFF6B7280);
+
+  // Subtle background (table headers, dividers, etc.)
+  static const subtleBgLight = Color(0xFFF8FAFC);
+  static const subtleBgDark = Color(0xFF252836);
+  static const subtleBorderLight = Color(0xFFF1F5F9);
+  static const subtleBorderDark = Color(0xFF2E3347);
 
   // Stat card gradients (background tints)
   static const hostelsBg = Color(0xFFEDE9FE);
@@ -50,6 +61,27 @@ class AdminColors {
   static const residentsIcon = Color(0xFF059669);
   static const bedsIcon = Color(0xFFD97706);
   static const pendingIcon = Color(0xFFDC2626);
+
+  // ─── Theme-aware helper methods ────────────────────────
+  static bool _isDark(BuildContext ctx) =>
+      Theme.of(ctx).brightness == Brightness.dark;
+
+  static Color card(BuildContext ctx) =>
+      _isDark(ctx) ? cardDark : cardLight;
+  static Color scaffold(BuildContext ctx) =>
+      _isDark(ctx) ? scaffoldDark : scaffoldLight;
+  static Color border(BuildContext ctx) =>
+      _isDark(ctx) ? cardBorderDark : cardBorder;
+  static Color subtleBg(BuildContext ctx) =>
+      _isDark(ctx) ? subtleBgDark : subtleBgLight;
+  static Color subtleBorder(BuildContext ctx) =>
+      _isDark(ctx) ? subtleBorderDark : subtleBorderLight;
+  static Color text(BuildContext ctx) =>
+      _isDark(ctx) ? textPrimaryDark : textPrimary;
+  static Color secondaryText(BuildContext ctx) =>
+      _isDark(ctx) ? textSecondaryDark : textSecondary;
+  static Color mutedText(BuildContext ctx) =>
+      _isDark(ctx) ? textMutedDark : textMuted;
 }
 
 class AdminGradients {
